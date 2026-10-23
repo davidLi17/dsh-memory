@@ -1383,6 +1383,8 @@ export async function apply(ctx: Context): Promise<void> {
         // only. The service anchor is used only when session cwd is absent.
         const bases = scope === 'project' ? projectBasesFor(ctx, exec) : [scopeDir(scope)].filter((b): b is string => b !== undefined)
         for (const base of bases) {
+        // Omit absent fields: DSH rejects workspace: undefined before PTC rendering.
+        const workspace = scope === 'project' ? { workspace: path.resolve(base, '..', '..') } : {}
         const dir = memoryDirOf(base)
         const files = (await fs.readdir(dir).catch(() => [] as string[])).filter(f => f.endsWith('.md')).sort().reverse()
         for (const f of files) {
@@ -1391,12 +1393,12 @@ export async function apply(ctx: Context): Promise<void> {
           const kind = memoryKind(text)
           if (args.kind !== undefined && args.kind !== kind) continue
           if (f.toLowerCase().includes(lower)) {
-            matches.push({ scope, kind, id: f.replace(/\.md$/, ''), title: f.replace(/\.md$/, ''), excerpt: '(id match)', workspace: scope === 'project' ? path.resolve(base, '..', '..') : undefined }) // B2: same entry shape as the content branch
+            matches.push({ scope, kind, id: f.replace(/\.md$/, ''), title: f.replace(/\.md$/, ''), excerpt: '(id match)', ...workspace }) // B2: same entry shape as the content branch
             continue
           }
           if (text.toLowerCase().includes(lower)) {
             const titleLine = /^#\s+(.+)$/m.exec(text)?.[1] ?? f
-            matches.push({ scope, kind, id: f.replace(/\.md$/, ''), title: titleLine, excerpt: excerpt(text, q), workspace: scope === 'project' ? path.resolve(base, '..', '..') : undefined }) // B2: model can tell which workspace a project hit came from
+            matches.push({ scope, kind, id: f.replace(/\.md$/, ''), title: titleLine, excerpt: excerpt(text, q), ...workspace }) // B2: model can tell which workspace a project hit came from
           }
         }
         }
