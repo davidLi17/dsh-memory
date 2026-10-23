@@ -16,6 +16,7 @@ interface ClientSlotContext {
 }
 
 interface PanelEntry {
+  kind?: 'memory' | 'reference'
   id?: string
   title: string
   date: string
@@ -227,7 +228,7 @@ function EntryList(props: { entries: PanelEntry[], query: string, target: SaveTa
               ? h('button', { style: S.smallButton, title: 'Delete this memory', disabled: deleting === e.id, onClick: () => del(e) }, deleting === e.id ? '…' : '×')
               : null,
           ),
-          h('div', { style: S.muted }, e.date !== '' ? `${e.date} — ` : '', e.excerpt),
+          h('div', { style: S.muted }, e.kind === 'reference' ? '历史资料 · ' : '', e.date !== '' ? `${e.date} — ` : '', e.excerpt),
         ),
       )
     }),
@@ -239,6 +240,15 @@ function MemoryForm(props: { target: SaveTarget, initial?: PanelEntry, onDone: (
   const editing = props.initial !== undefined && props.initial.id !== undefined
   const [title, setTitle] = useState(props.initial?.title ?? '')
   const [content, setContent] = useState('')
+  const [kind, setKind] = useState<'memory' | 'reference'>(props.initial?.kind ?? 'memory')
+  const [target, setTarget] = useState(props.target.scope === 'user' ? 'user' : props.target.workspace ?? '')
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([])
+  useEffect(() => {
+    if (!editing) return
+    fetch('/dsh-memory/api/v1/list').then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<PanelData> })
+      .then(d => setWorkspaces(d.scopes.projects ?? []))
+      .catch(err => setFormError(String(err)))
+  }, [])
   const [tags, setTags] = useState(props.initial?.tags.join(', ') ?? '')
   const [memPath, setMemPath] = useState(props.initial?.path ?? '')
   const [loading, setLoading] = useState(editing)
@@ -252,7 +262,7 @@ function MemoryForm(props: { target: SaveTarget, initial?: PanelEntry, onDone: (
       body: JSON.stringify({ scope: props.target.scope, workspace: props.target.workspace, id: props.initial!.id }),
     })
       .then(async r => {
-        const d = r.json() as Promise<{ ok?: boolean, error?: string, content?: string, title?: string, path?: string, tags?: string[] }>
+        const d = r.json() as Promise<{ ok?: boolean, error?: string, content?: string, title?: string, path?: string, tags?: string[], kind?: 'memory' | 'reference' }>
         if (!r.ok || (await d).ok !== true) throw new Error((await d as { error?: string }).error ?? `HTTP ${r.status}`)
         return d
       })
@@ -260,6 +270,7 @@ function MemoryForm(props: { target: SaveTarget, initial?: PanelEntry, onDone: (
         // N5: the file is authoritative — backfill title/path/tags too, else a
         // hand-edited file would be overwritten with stale index-row values on save
         setContent(d.content ?? '')
+        setKind(d.kind ?? 'memory')
         if (typeof d.title === 'string' && d.title !== '') setTitle(d.title)
         if (typeof d.path === 'string') setMemPath(d.path)
         if (Array.isArray(d.tags)) setTags(d.tags.join(', '))
@@ -279,8 +290,8 @@ function MemoryForm(props: { target: SaveTarget, initial?: PanelEntry, onDone: (
       // N4: edit sends '' (not undefined) when the field is empty — the server
       // treats an explicit '' as "clear the path tag"; undefined keeps the old one
       body: JSON.stringify(editing
-        ? { scope: props.target.scope, workspace: props.target.workspace, id: props.initial!.id, title, content, tags: tagList, path: memPath.trim() }
-        : { scope: props.target.scope, workspace: props.target.workspace, title, content, tags: tagList, path: memPath.trim() === '' ? undefined : memPath.trim() }),
+        ? { scope: props.target.scope, workspace: props.target.workspace, id: props.initial!.id, title, content, kind, targetScope: target === 'user' ? 'user' : 'project', targetWorkspace: target === 'user' ? undefined : target, tags: tagList, path: memPath.trim() }
+        : { scope: props.target.scope, workspace: props.target.workspace, title, content, kind, tags: tagList, path: memPath.trim() === '' ? undefined : memPath.trim() }),
     })
       .then(async r => {
         const d = r.json() as Promise<{ ok?: boolean, error?: string }>
@@ -291,6 +302,14 @@ function MemoryForm(props: { target: SaveTarget, initial?: PanelEntry, onDone: (
   }
   if (loading && formError === null) return h('div', { style: S.form }, 'Loading…')
   return h('form', { style: S.form, onSubmit: submit },
+    editing ? h('select', { style: S.input, value: target, onChange: (e: ChangeEvent<HTMLSelectElement>) => { setTarget(e.target.value); setMemPath('') }, 'aria-label': 'Memory scope' },
+      h('option', { value: 'user' }, '用户 · 跨项目偏好'),
+      workspaces.map(ws => h('option', { key: ws.root, value: ws.root }, `项目 · ${ws.name}`)),
+    ) : null,
+    h('select', { style: S.input, value: kind, onChange: (e: ChangeEvent<HTMLSelectElement>) => setKind(e.target.value as 'memory' | 'reference'), 'aria-label': 'Memory purpose' },
+      h('option', { value: 'memory' }, '长期记忆 · 自动提供简短索引'),
+      h('option', { value: 'reference' }, '历史资料 · 仅按需检索'),
+    ),
     h('input', { style: S.input, placeholder: 'Title (max 60 chars)', value: title, maxLength: 60, autoFocus: true, onChange: (e: ChangeEvent<HTMLInputElement>) => setTitle(e.target.value) }),
     h('textarea', { style: S.textarea, placeholder: 'The memory itself — self-contained, will matter months later', value: content, rows: 4, onChange: (e: ChangeEvent<HTMLTextAreaElement>) => setContent(e.target.value) }),
     h('input', { style: S.input, placeholder: 'Tags, comma-separated (optional)', value: tags, onChange: (e: ChangeEvent<HTMLInputElement>) => setTags(e.target.value) }),

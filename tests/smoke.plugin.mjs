@@ -31,11 +31,11 @@ const tool = n => registered.find(t => t.name === n)
 const exec = { signal: new AbortController().signal }
 let savedId = ''
 
-test('插件注册 4 工具 + 1 系统提示词段', () => {
+test('插件注册 5 工具 + 1 系统提示词段', () => {
   assert.deepEqual([...plugin.inject].sort(), ['systemPrompt', 'tools'], 'inject 必须声明所有被访问的服务（真实宿主缺声明直接拒绝激活）')
-  assert.equal(registered.length, 4)
+  assert.equal(registered.length, 5)
   assert.deepEqual(registered.map(t => t.name).sort(),
-    ['memory_list', 'memory_read', 'memory_save', 'memory_search'])
+    ['memory_list', 'memory_read', 'memory_save', 'memory_search', 'memory_update'])
   assert.equal(sections.length, 1)
 })
 
@@ -384,10 +384,10 @@ test('v0.11.1 review 缺口③：read 会话桶优先 + 锚桶兜底', async () 
   assert.ok(r2.content !== undefined, '锚桶兜底读取')
 })
 
-test('v0.11.1 review 缺口③：list 合并两桶', async () => {
+test('Fork：list 仅当前会话项目，不混入宿主锚点', async () => {
   const out = await tool('memory_list').execute({}, { signal: new AbortController().signal, agent: { session: { header: { cwd: path.join(tmp, 'review-ws') } } } })
   assert.ok(out.project.entries.some(l => l.includes('Review gap')), '会话桶在列表')
-  assert.ok(out.project.entries.some(l => l.includes('Prefer Pnpm')), '锚桶 project 记忆也在列表（合并）')
+  assert.ok(!out.project.entries.some(l => l.includes('Prefer Pnpm')), '宿主锚桶不得串入当前项目')
 })
 
 test('v0.11.2 空态显示：目录存在但无记忆的工作区也列出（引导添加第一条）', async () => {
@@ -483,7 +483,7 @@ test('F5 面板工作区名跟随宿主 title（GUI 改名后同步）', async (
 
 test('0.13.9 保存门槛措辞：结论时刻/单主题/问用户三个关键句在场', () => {
   const text = sections[0].text({})
-  assert.ok(text.includes('memory_save only month-scale facts, at conclusions'), '结论时刻触发必须在场')
+  assert.ok(text.includes('Save at conclusions: durable preferences'), '结论时刻触发必须在场')
   assert.ok(text.includes('update it in place instead of near-duplicating'), '单主题原地更新必须在场')
   assert.ok(text.includes('skip or ask the user'), '边界问用户必须在场')
   assert.ok(text.includes('Memory is not proof of current behavior'), '0.13.6 的 not-proof 句必须保留')

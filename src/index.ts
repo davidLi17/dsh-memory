@@ -36,6 +36,7 @@ import { promises as fs, existsSync, readFileSync, statSync, readdirSync } from 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
 import os from 'node:os'
+import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
@@ -203,6 +204,14 @@ const SECRET_PATTERN = /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----|ghp
 /** A tag must not carry the two characters that structure the index line and the frontmatter. */
 const sanitizeTag = (t: string) => t.replace(/[`,]/g, '').trim()
 
+async function backupMemory(base: string, id: string, original: string): Promise<string> {
+  const dir = path.join(base, 'backups', id)
+  await fs.mkdir(dir, { recursive: true })
+  const file = path.join(dir, `${Date.now()}-${randomUUID()}.md`)
+  await fs.writeFile(file, original, { flag: 'wx' })
+  return file
+}
+
 async function ensureDirs(base: string): Promise<void> {
   await fs.mkdir(memoryDirOf(base), { recursive: true })
 }
@@ -250,7 +259,9 @@ async function pruneMemories(base: string): Promise<number> {
   const files = (await fs.readdir(dir).catch(() => [] as string[])).filter(f => f.endsWith('.md')).sort()
   const excess = files.length - MAX_MEMORIES
   for (let i = 0; i < excess; i++) {
-    await fs.rm(path.join(dir, files[i]!), { force: true })
+    const file = path.join(dir, files[i]!)
+    await backupMemory(base, files[i]!.replace(/\.md$/, ''), await fs.readFile(file, 'utf8'))
+    await fs.rm(file, { force: true })
   }
   return Math.max(excess, 0)
 }
@@ -279,7 +290,12 @@ async function atomicWriteFile(file: string, data: string): Promise<void> {
   }
 }
 
+type MemoryKind = 'memory' | 'reference'
+const memoryKind = (text: string): MemoryKind => /^kind: reference$/m.test(text.split('\n---')[0] ?? '') ? 'reference' : 'memory'
+const validKind = (value: unknown): boolean => value === undefined || value === 'memory' || value === 'reference'
+
 interface SaveCoreInput {
+  kind?: MemoryKind
   scope: 'user' | 'project'
   base: string
   title: string
@@ -291,7 +307,7 @@ interface SaveCoreInput {
 }
 
 type SaveCoreResult =
-  | { ok: true, saved: true, id: string, scope: string, file: string, updated: boolean, indexEntries: number, prunedMemories: number, notice: string }
+  | { ok: true, saved: true, id: string, scope: string, kind: MemoryKind, file: string, updated: boolean, indexEntries: number, prunedMemories: number, notice: string }
   | { ok: false, error: string }
 
 /**
@@ -325,6 +341,7 @@ async function saveMemoryCore(input: SaveCoreInput): Promise<SaveCoreResult> {
     const existing = (await fs.readdir(dir).catch(() => [] as string[])).find(f => idPattern.test(f))
     const id = existing === undefined ? `${timestamp(now)}-${slug}` : existing.replace(/\.md$/, '')
     const updated = existing !== undefined
+    const kind = input.kind ?? (existing === undefined ? 'memory' : memoryKind(await fs.readFile(path.join(dir, existing), 'utf8')))
     const file = path.join(dir, `${id}.md`)
     let memPath = (input.memPathArg?.trim() ?? '').replace(/[^a-zA-Z0-9\u4e00-\u9fff/_-]+/g, '-').replace(/^-+|-+$/g, '')
     if (memPath === '' && scope === 'project') {
@@ -336,18 +353,19 @@ async function saveMemoryCore(input: SaveCoreInput): Promise<SaveCoreResult> {
       const cwd = input.sessionCwd ?? process.cwd()
       if (cwd.startsWith(projRoot + path.sep)) memPath = path.relative(projRoot, cwd).split(path.sep).join('/')
     }
-    const header = `---\nid: ${id}\nscope: ${scope}\npath: ${memPath}\nsaved_at: ${now.toISOString()}\ntags: ${tags.join(', ')}\n---\n\n# ${title}\n\n`
+    const header = `---\nid: ${id}\nscope: ${scope}\nkind: ${kind}\npath: ${memPath}\nsaved_at: ${now.toISOString()}\ntags: ${tags.join(', ')}\n---\n\n# ${title}\n\n`
+    if (updated) await backupMemory(base, id, await fs.readFile(file, 'utf8'))
     await atomicWriteFile(file, header + content + '\n')
     const tagSuffix = tags.length ? ` \`${tags.slice(0, 3).join('` `')}\`` : '' // index line caps at 3 tags — it injects every turn; full tags stay in frontmatter for search
     const pathTag = memPath !== '' ? ` [${memPath}]` : ''
     const indexLine = `- [${indexSafe(title)}](memories/${id}.md) — ${indexSafe(safeSlice(content.split('\n')[0] ?? '', 80))} (${date})${pathTag}${tagSuffix}`
     const lines = (await readIndex(base)).filter(l => !l.includes(`(memories/${id}.md)`))
-    lines.unshift(indexLine)
+    if (kind === 'memory') lines.unshift(indexLine)
     const kept = await writeIndexGuarded(base, lines)
     const pruned = updated ? 0 : await pruneMemories(base)
     if (scope === 'project') void recordSessionWorkspace(path.resolve(base, '..', '..')) // panel enumeration sees this workspace next refresh
     return {
-      ok: true, saved: true, id, scope, file, updated, indexEntries: kept, prunedMemories: pruned,
+      ok: true, saved: true, id, scope, kind, file, updated, indexEntries: kept, prunedMemories: pruned,
       notice: `${updated ? `Updated existing ${scope} memory ${id}` : `Saved 1 ${scope} memory`} (${scope === 'project' ? 'team-shared, commit it to git' : 'personal, cross-project'}). Index now lists ${kept} entries.`,
     }
   } catch (e) {
@@ -478,10 +496,11 @@ async function handlePanelSave(ctx: Context, request: IncomingMessage, response:
     const title = safeSlice(String(body.title ?? '').trim(), 60)
     const content = safeSlice(String(body.content ?? '').trim(), MAX_CONTENT_CHARS)
     const tags = (Array.isArray(body.tags) ? body.tags : []).filter((t): t is string => typeof t === 'string').slice(0, 10)
+    if (!validKind(body.kind)) { reply(400, { ok: false, error: 'kind must be memory or reference' }); return }
     if (title === '' || content === '') { reply(400, { ok: false, error: 'title and content must be non-empty' }); return }
     const base = await resolvePanelBase(ctx, body, reply)
     if (base === undefined) return
-    const r = await saveMemoryCore({ scope: body.scope as 'user' | 'project', base, title, content, tags, sessionCwd: '', memPathArg: typeof body.path === 'string' ? body.path : undefined }) // C1: panel saves are root-level unless an explicit path tag is given — never fall back to the process cwd
+    const r = await saveMemoryCore({ scope: body.scope as 'user' | 'project', kind: body.kind as MemoryKind | undefined, base, title, content, tags, sessionCwd: '', memPathArg: typeof body.path === 'string' ? body.path : undefined }) // C1: panel saves are root-level unless an explicit path tag is given — never fall back to the process cwd
     if (!r.ok) { reply(500, { ok: false, error: r.error }); return }
     reply(200, r)
   } catch (e) {
@@ -524,7 +543,14 @@ async function handlePanelUpdate(ctx: Context, request: IncomingMessage, respons
   const reply = panelReply(response)
   try {
     const body = await readPanelBody(request, 1000000, reply)
-    if (body === undefined) return
+    if (body !== undefined) await updateMemoryCore(body, reply, (body, reply) => resolvePanelBase(ctx, body, reply))
+  } catch (e) {
+    reply(400, { ok: false, error: String((e as Error)?.message ?? e) })
+  }
+}
+
+async function updateMemoryCore(body: Record<string, unknown>, reply: PanelReply, resolveBase: (body: Record<string, unknown>, reply: PanelReply) => Promise<string | undefined>): Promise<void> {
+  try {
     const rawId = panelIdOf(body, reply)
     if (rawId === undefined) return
     const title = body.title === undefined ? undefined : safeSlice(String(body.title).trim(), 60)
@@ -532,17 +558,28 @@ async function handlePanelUpdate(ctx: Context, request: IncomingMessage, respons
     const tags = Array.isArray(body.tags) ? body.tags.filter((t): t is string => typeof t === 'string').slice(0, 10) : undefined
     if (title === '') { reply(400, { ok: false, error: 'title must be non-empty' }); return }
     if (content === '') { reply(400, { ok: false, error: 'content must be non-empty' }); return }
+    if (!validKind(body.kind)) { reply(400, { ok: false, error: 'kind must be memory or reference' }); return }
     const pathArg = typeof body.path === 'string' ? body.path.trim().replace(/[^a-zA-Z0-9\u4e00-\u9fff/_-]+/g, '-').replace(/^-+|-+$/g, '') : undefined
-    const base = await resolvePanelBase(ctx, body, reply)
+    const base = await resolveBase(body, reply)
     if (base === undefined) return
     const file = path.join(memoryDirOf(base), `${rawId}.md`)
     if (!existsSync(file)) { reply(404, { ok: false, error: 'memory not found' }); return }
-    const text = (await fs.readFile(file, 'utf8')).replace(/\r\n/g, '\n') // C9: hand-edited CRLF files stay editable
+    const original = await fs.readFile(file, 'utf8')
+    const text = original.replace(/\r\n/g, '\n') // C9: hand-edited CRLF files stay editable
     const fm = /^---\n([\s\S]*?)\n---\n\n# (.*)\n\n([\s\S]*)$/.exec(text)
     if (fm === null) { reply(422, { ok: false, error: 'unrecognized memory file format' }); return }
-    const oldPath = pathArg ?? (/^path: (.*)$/m.exec(fm[1]!)?.[1] ?? '') // C2: an explicit path arg re-tags the memory''
-    const oldScope = /^scope: (.*)$/m.exec(fm[1]!)?.[1] ?? String(body.scope)
+    const targetScope = body.targetScope ?? body.scope
+    if (targetScope === 'project' && body.scope !== 'project' && typeof body.targetWorkspace !== 'string') { reply(400, { ok: false, error: 'choose a target project workspace before moving' }); return }
+    const targetBase = await resolveBase({ scope: targetScope, workspace: body.targetWorkspace ?? (targetScope === body.scope ? body.workspace : undefined) }, reply)
+    if (targetBase === undefined) return
+    const moving = targetBase !== base
+    const oldPath = pathArg ?? (moving ? '' : (/^path: (.*)$/m.exec(fm[1]!)?.[1] ?? ''))
+    const targetFile = path.join(memoryDirOf(targetBase), `${rawId}.md`)
+    if (moving && existsSync(targetFile)) { reply(409, { ok: false, error: 'target memory already exists; nothing moved' }); return }
+    const kind = body.kind as MemoryKind | undefined ?? memoryKind(text)
+    const oldScope = String(targetScope)
     const newTitle = title ?? fm[2]!
+    if (moving && scopeStats(targetBase).entries.some(e => slugify(String(e.title)) === slugify(newTitle))) { reply(409, { ok: false, error: 'target already contains this title; nothing moved' }); return }
     const newContent = content ?? fm[3]!
     const newTags = (tags ?? (/^tags: (.*)$/m.exec(fm[1]!)?.[1] ?? '').split(',').map(s => s.trim()).filter(s => s !== '')).map(sanitizeTag).filter(t => t !== '')
     // C5: the SAME secret scan as the save path — update must not be the bypass
@@ -552,15 +589,23 @@ async function handlePanelUpdate(ctx: Context, request: IncomingMessage, respons
     }
     const now = new Date()
     const date = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`
-    const header = `---\nid: ${rawId}\nscope: ${oldScope}\npath: ${oldPath}\nsaved_at: ${now.toISOString()}\ntags: ${newTags.join(', ')}\n---\n\n# ${newTitle}\n\n`
-    await atomicWriteFile(file, header + newContent + '\n')
+    const header = `---\nid: ${rawId}\nscope: ${oldScope}\nkind: ${kind}\npath: ${oldPath}\nsaved_at: ${now.toISOString()}\ntags: ${newTags.join(', ')}\n---\n\n# ${newTitle}\n\n`
+    const backupFile = await backupMemory(base, rawId, original)
+    await ensureDirs(targetBase)
+    if (moving) await fs.writeFile(targetFile, header + newContent + '\n', { flag: 'wx' })
+    else await atomicWriteFile(file, header + newContent + '\n')
     const tagSuffix = newTags.length ? ` \`${newTags.slice(0, 3).join('` `')}\`` : ''
     const pathTag = oldPath !== '' ? ` [${oldPath}]` : ''
     const indexLine = `- [${indexSafe(newTitle)}](memories/${rawId}.md) — ${indexSafe(safeSlice(newContent.split('\n')[0] ?? '', 80))} (${date})${pathTag}${tagSuffix}`
-    const lines = (await readIndex(base)).filter(l => !l.includes(`(memories/${rawId}.md)`))
-    lines.unshift(indexLine)
-    const kept = await writeIndexGuarded(base, lines)
-    reply(200, { ok: true, updated: rawId, title: newTitle, indexEntries: kept })
+    const lines = (await readIndex(targetBase)).filter(l => !l.includes(`(memories/${rawId}.md)`))
+    if (kind === 'memory') lines.unshift(indexLine)
+    const kept = await writeIndexGuarded(targetBase, lines)
+    if (moving) {
+      await writeIndexGuarded(base, (await readIndex(base)).filter(l => !l.includes(`(memories/${rawId}.md)`)))
+      await fs.rm(file)
+      if (targetScope === 'project') await recordSessionWorkspace(path.resolve(targetBase, '..', '..'))
+    }
+    reply(200, { ok: true, updated: rawId, title: newTitle, scope: targetScope, kind, backup_file: backupFile, indexEntries: kept })
   } catch (e) {
     reply(400, { ok: false, error: String((e as Error)?.message ?? e) })
   }
@@ -584,8 +629,8 @@ async function recordSessionWorkspace(root: string): Promise<void> {
 /**
  * v0.11.1: project-scope buckets a tool should touch for THIS call — the
  * calling session's workspace first (exec.agent, when the agent loop set it),
- * then the service-anchor bucket as fallback so pre-session-era memories
- * stay reachable. Deduped; single-element in single-workspace hosts.
+ * service-anchor bucket only when the call has no session cwd. A known
+ * session must never retrieve a different project's anchor memories.
  */
 function projectBasesFor(ctx: Context, exec: unknown): string[] {
   const bases: string[] = []
@@ -597,8 +642,8 @@ function projectBasesFor(ctx: Context, exec: unknown): string[] {
   const sessionCwd = workingDirectoryCwd(ctx, agent) ?? sessionCwdOfAgent(agent)
   const sessionBase = sessionCwd === undefined ? undefined : projectBaseFor(sessionCwd)
   const anchorBase = scopeDir('project')
-  if (sessionBase !== undefined) bases.push(sessionBase)
-  if (anchorBase !== undefined && !bases.includes(anchorBase)) bases.push(anchorBase)
+  if (sessionCwd !== undefined) return sessionBase === undefined ? [] : [sessionBase]
+  if (anchorBase !== undefined) bases.push(anchorBase)
   return bases
 }
 
@@ -663,7 +708,7 @@ async function handlePanelRead(ctx: Context, request: IncomingMessage, response:
     if (fm === null) { reply(422, { ok: false, error: 'unrecognized memory file format' }); return }
     const memPath = /^path: (.*)$/m.exec(fm[1]!)?.[1] ?? ''
     const tags = (/^tags: (.*)$/m.exec(fm[1]!)?.[1] ?? '').split(',').map(s => s.trim()).filter(s => s !== '')
-    reply(200, { ok: true, id, title: fm[2], content: fm[3]!.replace(/\n$/, ''), path: memPath, tags }) // strip the storage-format trailing newline
+    reply(200, { ok: true, id, kind: memoryKind(text), title: fm[2], content: fm[3]!.replace(/\n$/, ''), path: memPath, tags }) // strip the storage-format trailing newline
   } catch (e) {
     reply(400, { ok: false, error: String((e as Error)?.message ?? e) })
   }
@@ -677,10 +722,11 @@ function excerpt(text: string, query: string, radius = 60): string {
 }
 
 const SAVE_DESCRIPTION = [
-  'Save a durable memory that persists across sessions. Default bar: would this still matter a month from now? If unsure, skip it or ask the user first — memory noise costs more than memory gaps.',
+  'Save a durable memory or on-demand reference across sessions. For kind=memory the bar is: would this still matter a month from now? If unsure, skip it or ask the user first — memory noise costs more than memory gaps.',
+  'For historical records, session IDs, logs and detailed procedures choose kind=reference; these remain searchable without entering the standing prompt. ',
   'SAVE: durable user preferences, habits, corrections; project decisions AND their rationale; conventions that outlive the task; lessons from a CONCLUDED investigation.',
-  'DO NOT save: mid-investigation progress or state that will change ("currently broken/unfixed" is not a memory — save the conclusion once the task settles); anything derivable from the repo or git history; one-off task details; secrets (refuse and say so).',
-  'Write style: an entry is an INSTRUCTION for a future agent, not a report — imperative and self-contained in 2-5 sentences ("use X; never Y because Z"); the title is a short directive, not a full sentence (the title becomes the injected index line — a sentence-length title wastes every future prompt); at most 3 tags — memory_search matches content, not tag count.',
+  'DO NOT save as standing memory: mid-investigation progress or state that will change ("currently broken/unfixed" is not a memory — save the conclusion once the task settles); anything derivable from the repo or git history; one-off task details; secrets (refuse and say so).',
+  'For kind=memory write style: an entry is an INSTRUCTION for a future agent, not a report — imperative and self-contained in 2-5 sentences ("use X; never Y because Z"); the title is a short directive, not a full sentence (the title becomes the injected index line — a sentence-length title wastes every future prompt); at most 3 tags — memory_search matches content, not tag count.',
   'Rules: (1) save at conclusions, never while still working; (2) one topic = one memory — the same feature/bug/investigation stays one entry; the dated index lines in your prompt show what already exists: check them and update in place instead of near-duplicating; (3) a session typically ends with zero to two new or updated memories; (4) scope: personal cross-project preferences → "user"; project decisions → "project" (team-shared, committed to git).',
 ].join(' ')
 
@@ -737,7 +783,7 @@ function parseEntryLine(line: string): Record<string, unknown> {
   const pathM = /\) \[([^\]]+)\]/.exec(rest)
   const tags = [...rest.matchAll(/`([^`]+)`/g)].map(t => t[1]!)
   const excerpt = rest.split(' (')[0]!.slice(0, 100)
-  return { id: m[2], title: m[1]!, date: dateM?.[1] ?? '', path: pathM?.[1] ?? '', tags, excerpt }
+  return { kind: 'memory', id: m[2], title: m[1]!, date: dateM?.[1] ?? '', path: pathM?.[1] ?? '', tags, excerpt }
 }
 
 /** Per-scope stats + entries snapshot (sync; panel GET). */
@@ -768,6 +814,7 @@ function scopeStats(base: string): { stats: Record<string, number>, entries: Arr
         path: /^path: (.*)$/m.exec(fm?.[1] ?? '')?.[1] ?? '',
         tags: (/^tags: (.*)$/m.exec(fm?.[1] ?? '')?.[1] ?? '').split(',').map(s => s.trim()).filter(s => s !== ''),
         excerpt: (fm?.[3] ?? '').split('\n')[0]?.slice(0, 100) ?? '',
+        kind: memoryKind(text),
         unindexed: true,
       })
     } catch { /* unreadable file stays hidden */ }
@@ -1126,7 +1173,7 @@ function registerMemoryGuidance(ctx: Context): void {
       // many sessions with different cwds). Without it we keep the legacy
       // process-wide behavior — still correct for single-workspace hosts.
       const sessionCwd = workingDirectoryCwd(ctx, args?.agent) ?? sessionCwdOfAgent(args?.agent) ?? sessionCwdOfAgent(args?.scope) ?? extractSessionCwd(args?.scope) ?? process.cwd()
-      const projectBase = projectBaseFor(sessionCwd) ?? scopeDir('project')
+      const projectBase = projectBaseFor(sessionCwd)
       // BUG B fix (v0.11.4): scope admission used the module-level
       // activeScopes(), so a host started from a guarded directory ($HOME,
       // /tmp) had NO project domain even though the session's workspace bucket
@@ -1221,7 +1268,7 @@ function registerMemoryGuidance(ctx: Context): void {
         + sections.join('\n\n')
         + '\n\nUse memory_search / memory_read when prior context, user preferences, or earlier decisions may matter — before re-asking the user. '
         + 'Memory is not proof of current behavior — for consequential claims, inspect the actual owning source. '
-        + 'memory_save only month-scale facts, at conclusions — never mid-progress state ("currently broken" is not a memory): preferences → "user"; project decisions/conventions → "project". '
+        + 'Save at conclusions: durable preferences as user memories and project decisions as project memories; historical records and procedures use kind=reference (on-demand). '
         + 'The dated lines above show what already exists — the same feature/bug/investigation is one topic: update it in place instead of near-duplicating. '
         + 'Unsure whether durable → skip or ask the user; noise costs more than gaps. Never secrets or transient details.'
     },
@@ -1240,7 +1287,8 @@ export async function apply(ctx: Context): Promise<void> {
       title: { type: 'string', required: true, description: 'Short title (max ~60 chars) shown in the index.' },
       content: { type: 'string', required: true, description: 'The memory itself. Self-contained plain text or markdown; will matter months later without this chat.' },
       tags: { type: 'array', items: { type: 'string' }, description: 'Optional topical tags for retrieval.' },
-      scope: { type: 'string', enum: ['user', 'project'], description: 'Where to store: "project" = team-shared decisions/conventions, committed to git (default inside a git repository); "user" = personal cross-project preferences (default outside a repo).' },
+      scope: { type: 'string', enum: ['user', 'project'], description: 'Choose explicitly by content: user = preferences valid across projects; project = decisions/conventions specific to the current workspace. Never put project decisions in user. Omitted for compatibility: project when a workspace exists, user otherwise.' },
+      kind: { type: 'string', enum: ['memory', 'reference'], description: 'Choose memory for durable preferences/decisions; reference for historical records, session IDs, logs and detailed procedures. References are searchable but never auto-injected. Omitted: preserve existing kind, otherwise memory.' },
       path: { type: 'string', description: 'Optional sub-directory this memory belongs to (relative to project root, e.g. "frontend/src"). Auto-recorded from the session\'s effective working directory if omitted. Untagged (root-level) memories always inject; path-tagged memories inject once the session works in or touches (read/edit/write/grep/glob/shell calls) that area.' },
     },
     output: {
@@ -1249,8 +1297,9 @@ export async function apply(ctx: Context): Promise<void> {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }],
     },
-    async execute(args: { title: string, content: string, tags?: string[], scope?: 'user' | 'project', path?: string }, exec: { signal: AbortSignal, agent?: unknown } | { signal: AbortSignal }) {
+    async execute(args: { title: string, content: string, tags?: string[], scope?: 'user' | 'project', kind?: MemoryKind, path?: string }, exec: { signal: AbortSignal, agent?: unknown } | { signal: AbortSignal }) {
       if (exec.signal.aborted) return simpleError('aborted', 'Save aborted before completion.')
+      if (!validKind(args.kind)) return simpleError('invalid_input', 'kind must be memory or reference.')
       const title = safeSlice(args.title.trim(), 60)
       const content = safeSlice(args.content.trim(), MAX_CONTENT_CHARS)
       if (!title || !content) return simpleError('invalid_input', 'title and content must be non-empty.')
@@ -1264,13 +1313,46 @@ export async function apply(ctx: Context): Promise<void> {
       const sessionCwd = workingDirectoryCwd(ctx, agent) ?? sessionCwdOfAgent(agent)
       const sessionBase = sessionCwd === undefined ? undefined : projectBaseFor(sessionCwd)
       let scope = args.scope
-      if (scope === undefined) scope = (sessionBase ?? PROJECT_DIR) === undefined ? 'user' : 'project'
-      const base = scope === 'project' ? (sessionBase ?? scopeDir('project')) : scopeDir('user')
-      if (base === undefined) return simpleError('no_project_scope', 'No git repository detected here; only the "user" scope is available.')
-      const r = await saveMemoryCore({ scope, base, title, content, tags: args.tags, memPathArg: args.path, sessionCwd })
+      const projectBase = sessionCwd === undefined ? scopeDir('project') : sessionBase
+      if (scope === undefined) scope = projectBase === undefined ? 'user' : 'project'
+      const base = scope === 'project' ? projectBase : scopeDir('user')
+      if (base === undefined) return simpleError('no_project_scope', 'No project workspace is available for this session. Select the project working directory before saving project decisions; do not save them as user preferences.')
+      const r = await saveMemoryCore({ scope, kind: args.kind, base, title, content, tags: args.tags, memPathArg: args.path, sessionCwd })
       return r.ok ? r : simpleError('save_failed', r.error)
     },
     presentCall: args => ({ card: 'generic' as const, title: `Save memory: ${args.title}` }),
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'memory_update',
+    description: 'Update or reclassify one saved item by id, preserving an original backup. Project access is limited to this session. For consolidation load the memory-organize skill; preserve evidence as reference.',
+    parameters: {
+      id: { type: 'string', required: true, description: 'Existing memory id.' },
+      scope: { type: 'string', required: true, enum: ['user', 'project'], description: 'Current owner scope.' },
+      targetScope: { type: 'string', enum: ['user', 'project'], description: 'Optional new owner; project means current workspace.' },
+      kind: { type: 'string', enum: ['memory', 'reference'], description: 'memory = standing index; reference = on-demand only. Omitted preserves current kind.' },
+      title: { type: 'string', description: 'Optional replacement title.' },
+      content: { type: 'string', description: 'Optional replacement content; preserve source ids when consolidating.' },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }],
+    },
+    async execute(args: { id: string, scope: 'user' | 'project', targetScope?: 'user' | 'project', kind?: MemoryKind, title?: string, content?: string }, exec) {
+      if (exec.signal.aborted) return simpleError('aborted', 'Update aborted.')
+      const projectBase = projectBasesFor(ctx, exec)[0]
+      let result: Record<string, string | boolean | number> = { ok: false, error: 'Update did not complete.' }
+      await updateMemoryCore({ ...args, targetWorkspace: projectBase === undefined ? undefined : path.resolve(projectBase, '..', '..') },
+        (_status, value) => { result = value as Record<string, string | boolean | number> },
+        async (body, reply) => {
+          if (body.scope === 'user') return USER_DIR
+          if (body.scope === 'project' && projectBase !== undefined) return projectBase
+          reply(400, { ok: false, error: body.scope === 'project' ? 'No current project workspace; do not move project decisions into user memory.' : 'scope must be user or project' })
+          return undefined
+        })
+      return result
+    },
+    presentCall: args => ({ card: 'generic' as const, title: `Update memory: ${args.id}` }),
   }))
 
   ctx.tools.register(defineTool({
@@ -1279,6 +1361,7 @@ export async function apply(ctx: Context): Promise<void> {
     parameters: {
       query: { type: 'string', required: true, description: 'Keyword or phrase to look for.' },
       limit: { type: 'number', description: `Max results (default ${DEFAULT_SEARCH_LIMIT}, max 20).` },
+      kind: { type: 'string', enum: ['memory', 'reference'], description: 'Optional purpose filter; omitted searches memories and references.' },
       scope: { type: 'string', enum: ['user', 'project'], description: 'Restrict search to one scope; default searches both.' },
     },
     output: {
@@ -1287,32 +1370,33 @@ export async function apply(ctx: Context): Promise<void> {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }],
     },
-    async execute(args: { query: string, limit?: number, scope?: 'user' | 'project' }, exec) {
+    async execute(args: { query: string, limit?: number, scope?: 'user' | 'project', kind?: MemoryKind }, exec) {
       if (exec.signal.aborted) return simpleError('aborted', 'Search aborted.')
       const q = args.query.trim()
       if (!q) return simpleError('invalid_input', 'query must be non-empty.')
       const limit = Math.min(Math.max(Math.trunc(args.limit ?? DEFAULT_SEARCH_LIMIT), 1), 20)
       const lower = q.toLowerCase()
       const scopes: Array<'user' | 'project'> = args.scope === undefined ? (projectBasesFor(ctx, exec).length > 0 ? ['user', 'project'] : ['user']) : [args.scope] // BUG B fix: admission follows session-resolved buckets
-      const matches: Array<{ scope: string, id: string, title: string, excerpt: string, workspace?: string }> = []
+      const matches: Array<{ kind: MemoryKind, scope: string, id: string, title: string, excerpt: string, workspace?: string }> = []
       for (const scope of scopes) {
         // v0.11.1: the project scope follows the calling session's workspace
-        // first, the service anchor second — the injection's "memory_search
-        // surfaces them" promise holds in multi-workspace web hosts.
+        // only. The service anchor is used only when session cwd is absent.
         const bases = scope === 'project' ? projectBasesFor(ctx, exec) : [scopeDir(scope)].filter((b): b is string => b !== undefined)
         for (const base of bases) {
         const dir = memoryDirOf(base)
         const files = (await fs.readdir(dir).catch(() => [] as string[])).filter(f => f.endsWith('.md')).sort().reverse()
         for (const f of files) {
           if (matches.length >= limit) break
+          const text = await fs.readFile(path.join(dir, f), 'utf8').catch(() => '')
+          const kind = memoryKind(text)
+          if (args.kind !== undefined && args.kind !== kind) continue
           if (f.toLowerCase().includes(lower)) {
-            matches.push({ scope, id: f.replace(/\.md$/, ''), title: f.replace(/\.md$/, ''), excerpt: '(id match)', workspace: scope === 'project' ? path.resolve(base, '..', '..') : undefined }) // B2: same entry shape as the content branch
+            matches.push({ scope, kind, id: f.replace(/\.md$/, ''), title: f.replace(/\.md$/, ''), excerpt: '(id match)', workspace: scope === 'project' ? path.resolve(base, '..', '..') : undefined }) // B2: same entry shape as the content branch
             continue
           }
-          const text = await fs.readFile(path.join(dir, f), 'utf8').catch(() => '')
           if (text.toLowerCase().includes(lower)) {
             const titleLine = /^#\s+(.+)$/m.exec(text)?.[1] ?? f
-            matches.push({ scope, id: f.replace(/\.md$/, ''), title: titleLine, excerpt: excerpt(text, q), workspace: scope === 'project' ? path.resolve(base, '..', '..') : undefined }) // B2: model can tell which workspace a project hit came from
+            matches.push({ scope, kind, id: f.replace(/\.md$/, ''), title: titleLine, excerpt: excerpt(text, q), workspace: scope === 'project' ? path.resolve(base, '..', '..') : undefined }) // B2: model can tell which workspace a project hit came from
           }
         }
         }
@@ -1343,7 +1427,7 @@ export async function apply(ctx: Context): Promise<void> {
       // on-disk path instead of flooding the context window.
       for (const scope of ['project', 'user'] as const) {
         // v0.11.1: project reads try the calling session's workspace first,
-        // then the service anchor — old memories stay readable.
+        // with anchor fallback only when session cwd is unavailable.
         const bases = scope === 'project' ? projectBasesFor(ctx, exec) : [scopeDir(scope)].filter((b): b is string => b !== undefined)
         for (const base of bases) {
         const file = path.join(memoryDirOf(base), `${safe}.md`)
@@ -1355,10 +1439,10 @@ export async function apply(ctx: Context): Promise<void> {
             let cut = content.slice(0, 4000)
             const last = cut.charCodeAt(cut.length - 1)
             if (last >= 0xD800 && last <= 0xDBFF) cut = cut.slice(0, -1) // don't split a surrogate pair
-            return { id: safe, scope, content: cut, truncated: true, local_file: file, size_bytes, updated_at }
+            return { id: safe, scope, kind: memoryKind(content), content: cut, truncated: true, local_file: file, size_bytes, updated_at }
           }
           // identical field set in both branches: Record<string, JsonValue> rejects undefined-valued keys
-          return { id: safe, scope, content, truncated: false, local_file: file, size_bytes, updated_at }
+          return { id: safe, scope, kind: memoryKind(content), content, truncated: false, local_file: file, size_bytes, updated_at }
         } catch {
           continue
         }
@@ -1371,7 +1455,7 @@ export async function apply(ctx: Context): Promise<void> {
 
   ctx.tools.register(defineTool({
     name: 'memory_list',
-    description: 'List the most recent memories from both scopes, newest first. Good for a quick orientation at session start; prefer memory_search for topical lookup.',
+    description: 'List current user/project memories and separately labeled references. Reference details stay on demand; use memory_search for topical lookup.',
     parameters: {
       limit: { type: 'number', description: `Max entries per scope (default ${DEFAULT_SEARCH_LIMIT}, max 50).` },
     },
@@ -1384,11 +1468,10 @@ export async function apply(ctx: Context): Promise<void> {
     async execute(args: { limit?: number }, exec) {
       if (exec.signal.aborted) return simpleError('aborted', 'List aborted.')
       const limit = Math.min(Math.max(Math.trunc(args.limit ?? DEFAULT_SEARCH_LIMIT), 1), 50)
-      const out: Record<string, { total: number, truncated: boolean, entries: string[] }> = {}
+      const out: Record<string, { total: number, truncated: boolean, entries: string[], references: Array<{ id: string, title: string, kind: string }> }> = {}
       const listScopes: Array<'user' | 'project'> = projectBasesFor(ctx, exec).length > 0 ? ['user', 'project'] : ['user'] // BUG B fix
       for (const scope of listScopes) {
-        // v0.11.1: project lists merge the session workspace and the service
-        // anchor (session first, id-deduped) so both stay visible.
+        // List the active project only; an unrelated service anchor is excluded.
         const bases = scope === 'project' ? projectBasesFor(ctx, exec) : [scopeDir(scope)].filter((b): b is string => b !== undefined)
         let all: string[] = []
         const seenIds = new Set<string>()
@@ -1401,7 +1484,8 @@ export async function apply(ctx: Context): Promise<void> {
           }
         }
         const lines = all.slice(0, limit)
-        out[scope] = { total: lines.length, truncated: all.length > lines.length, entries: lines }
+        const references = bases.flatMap(base => scopeStats(base).entries.filter(e => e.kind === 'reference').map(e => ({ id: String(e.id), title: String(e.title), kind: 'reference' })))
+        out[scope] = { total: all.length + references.length, truncated: all.length > lines.length || references.length > limit, entries: lines, references: references.slice(0, limit) }
       }
       return out
     },

@@ -1,7 +1,14 @@
 # dsh plugin add @fooxe/dsh-memory installs this patch.
-# One insert: the plugin itself. The host provides peer services
+# The memory plugin and its isolated bundled skill provider. The host provides peer services
 # (@deepseek-ai/cordis, @deepseek-ai/dsh-tools); tools register on load,
 # system-prompt auto-injection activates when the service is present.
 - insert:
     - id: dsh-memory
       name: '@fooxe/dsh-memory'
+    - id: dsh-memory-organize-skills
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: dsh-memory-organize
+        includeDefaultRoots: false
+        bundledSkillDir: !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@fooxe/dsh-memory/package.json')), 'skills')
+        watch: false

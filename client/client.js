@@ -314,7 +314,7 @@ window.__ModuleLoader__.load({
 					title: "Delete this memory",
 					disabled: deleting === e.id,
 					onClick: () => del(e)
-				}, deleting === e.id ? "…" : "×") : null), (0, react.createElement)("div", { style: S.muted }, e.date !== "" ? `${e.date} — ` : "", e.excerpt)));
+				}, deleting === e.id ? "…" : "×") : null), (0, react.createElement)("div", { style: S.muted }, e.kind === "reference" ? "历史资料 · " : "", e.date !== "" ? `${e.date} — ` : "", e.excerpt)));
 			}));
 		}
 		/** One form, two modes — add (empty, /save) and edit (prefilled via /read, /update). Identical layout and size. */
@@ -322,6 +322,16 @@ window.__ModuleLoader__.load({
 			const editing = props.initial !== void 0 && props.initial.id !== void 0;
 			const [title, setTitle] = (0, react.useState)(props.initial?.title ?? "");
 			const [content, setContent] = (0, react.useState)("");
+			const [kind, setKind] = (0, react.useState)(props.initial?.kind ?? "memory");
+			const [target, setTarget] = (0, react.useState)(props.target.scope === "user" ? "user" : props.target.workspace ?? "");
+			const [workspaces, setWorkspaces] = (0, react.useState)([]);
+			(0, react.useEffect)(() => {
+				if (!editing) return;
+				fetch("/dsh-memory/api/v1/list").then((r) => {
+					if (!r.ok) throw new Error(`HTTP ${r.status}`);
+					return r.json();
+				}).then((d) => setWorkspaces(d.scopes.projects ?? [])).catch((err) => setFormError(String(err)));
+			}, []);
 			const [tags, setTags] = (0, react.useState)(props.initial?.tags.join(", ") ?? "");
 			const [memPath, setMemPath] = (0, react.useState)(props.initial?.path ?? "");
 			const [loading, setLoading] = (0, react.useState)(editing);
@@ -343,6 +353,7 @@ window.__ModuleLoader__.load({
 					return d;
 				}).then((d) => {
 					setContent(d.content ?? "");
+					setKind(d.kind ?? "memory");
 					if (typeof d.title === "string" && d.title !== "") setTitle(d.title);
 					if (typeof d.path === "string") setMemPath(d.path);
 					if (Array.isArray(d.tags)) setTags(d.tags.join(", "));
@@ -367,6 +378,9 @@ window.__ModuleLoader__.load({
 						id: props.initial.id,
 						title,
 						content,
+						kind,
+						targetScope: target === "user" ? "user" : "project",
+						targetWorkspace: target === "user" ? void 0 : target,
 						tags: tagList,
 						path: memPath.trim()
 					} : {
@@ -374,6 +388,7 @@ window.__ModuleLoader__.load({
 						workspace: props.target.workspace,
 						title,
 						content,
+						kind,
 						tags: tagList,
 						path: memPath.trim() === "" ? void 0 : memPath.trim()
 					})
@@ -390,7 +405,23 @@ window.__ModuleLoader__.load({
 			return (0, react.createElement)("form", {
 				style: S.form,
 				onSubmit: submit
-			}, (0, react.createElement)("input", {
+			}, editing ? (0, react.createElement)("select", {
+				style: S.input,
+				value: target,
+				onChange: (e) => {
+					setTarget(e.target.value);
+					setMemPath("");
+				},
+				"aria-label": "Memory scope"
+			}, (0, react.createElement)("option", { value: "user" }, "用户 · 跨项目偏好"), workspaces.map((ws) => (0, react.createElement)("option", {
+				key: ws.root,
+				value: ws.root
+			}, `项目 · ${ws.name}`))) : null, (0, react.createElement)("select", {
+				style: S.input,
+				value: kind,
+				onChange: (e) => setKind(e.target.value),
+				"aria-label": "Memory purpose"
+			}, (0, react.createElement)("option", { value: "memory" }, "长期记忆 · 自动提供简短索引"), (0, react.createElement)("option", { value: "reference" }, "历史资料 · 仅按需检索")), (0, react.createElement)("input", {
 				style: S.input,
 				placeholder: "Title (max 60 chars)",
 				value: title,

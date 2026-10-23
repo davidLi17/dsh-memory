@@ -4,6 +4,43 @@
 
 **English** | [**中文版**](#中文版)
 
+
+## davidLi17 自用版 / Personal fork
+
+基于 [annkun/dsh-memory](https://github.com/annkun/dsh-memory)，保留 MIT 许可证与上游归属。当前自用版：`0.13.11-lhg.1`。
+
+安装或切换到此版本（DSH Desktop）：
+
+```sh
+dsh plugin --profile desktop add 'github:davidLi17/dsh-memory#main'
+```
+
+安装后重启 DSH Desktop，只保留一份此插件。此分支随源码提交 `lib` 和客户端构建产物，安装无需运行 `prepare` 脚本。
+
+- **用户偏好**：`scope: user, kind: memory`，跨项目通用。
+- **项目决定**：`scope: project, kind: memory`，只供当前工作区使用。明确要求项目记忆但没有项目目录时返回错误，不改存用户记忆。
+- **历史资料**：`kind: reference`，仍选择所属的 user/project；保存在同一作用域内的 Markdown 文件中，以 `kind` 字段区分。不会写入常驻 `MEMORY.md` 索引，可通过 search/read/list 按需找到。适合历史会话 ID、日志字段、还原步骤和长教程；不会自动生成 Skill。
+
+设置 → Memory → 编辑，可修改用途以及所属用户/项目。迁移先保存目标及索引再清理来源，目标存在同 ID 或同标题时拒绝覆盖。尚未登记的项目需先在 DSH 创建工作区。旧文件没有 `kind` 时仍按长期记忆读取，现有记忆不会自动迁移或重新分类。
+
+`memory_save` 建议明确选择 scope 和 kind；旧调用省略 scope 时保持原有自动选择，省略 kind 时保留已有用途，新条目默认 memory。模型不再从已知会话的项目旁路检索宿主启动目录的项目记忆。
+
+This fork separates purpose (`memory` / `reference`) from scope (`user` / `project`). References remain searchable without standing prompt injection. Existing files keep their behavior. The settings editor can reclassify or move entries to a known workspace without overwriting destination entries. No automatic migration, classifier service, or extra runtime dependency is introduced.
+
+### 按需整理 / On-demand consolidation
+
+对 DSH 说：“加载 memory-organize 技能，整理我的用户与当前项目记忆，合并重复，历史资料改为按需检索，保留来源。”
+
+插件随包挂载一个独立的官方 filesystem skill provider，只发现本包的技能，不重复扫描默认目录。宿主须已有 `@deepseek-ai/dsh-skill-filesystem`；此包将它声明为 optional peer，不安装另一套 DSH 运行时。
+
+Agent 会通过现有 list/search/read/save 和新增 `memory_update` 执行整理；更新工具参数为 id、原 scope，可选 targetScope、kind、title、content，project 只指当前会话工作区。合并先保存新短结论，再把来源条目改为 reference，保留原 id 和出处。归属不明先保留，不猜测迁移。
+
+更新、迁移以及超过原有 500 条文件上限而淘汰前，将原文保存到原作用域 `backups/<id>/`，这些备份不参与检索与提示词注入。需要还原时可用返回的 backup_file 核对原 scope/kind/content 再通过编辑恢复。没有后台调度、额外 LLM 请求或自动生成多份 summary；既有 MEMORY.md 继续负责短索引。安装本插件不会立即改动任何现有记忆。
+
+The bundled skill consolidates through the current agent, with source-preserving reference entries and pre-update backups. It is loaded on demand; there is no background model or scheduler.
+
+Development: `npm ci --legacy-peer-deps --ignore-scripts` (upstream declares an unpublished transitive peer), then `npm run build` and `npm test`.
+
 ## English
 
 **Persistent memory for DeepSeek Harness — the Claude Code memory model: your agents remember across sessions, wake up with context, and never mix projects. Pure files, zero dependencies.**
