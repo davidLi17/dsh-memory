@@ -7,7 +7,7 @@
 
 ## davidLi17 自用版 / Personal fork
 
-基于 [annkun/dsh-memory](https://github.com/annkun/dsh-memory)，保留 MIT 许可证与上游归属。当前自用版：`0.13.11-lhg.1`。
+基于 [annkun/dsh-memory](https://github.com/annkun/dsh-memory)，保留 MIT 许可证与上游归属。当前自用版：`0.13.11-lhg.3`。
 
 安装或切换到此版本（DSH Desktop）：
 
@@ -26,6 +26,17 @@ dsh plugin --profile desktop add 'github:davidLi17/dsh-memory#main'
 `memory_save` 建议明确选择 scope 和 kind；旧调用省略 scope 时保持原有自动选择，省略 kind 时保留已有用途，新条目默认 memory。模型不再从已知会话的项目旁路检索宿主启动目录的项目记忆。
 
 This fork separates purpose (`memory` / `reference`) from scope (`user` / `project`). References remain searchable without standing prompt injection. Existing files keep their behavior. The settings editor can reclassify or move entries to a known workspace without overwriting destination entries. No automatic migration, classifier service, or extra runtime dependency is introduced.
+
+### 可视化管理 / Visual manager（0.13.11-lhg.3）
+
+- 支持的宿主可从侧栏 **Memory** 打开独立管理页；**设置 → Memory** 始终保留，两个入口共用同一面板。没有独立页面插槽的旧宿主仍使用设置入口。
+- 顶部总览区分长期记忆、历史资料和项目范围；左侧范围导航，中间按用途筛选与搜索，右侧按需读取详情。搜索只匹配列表中的标题、摘要、标签和路径，不会提前读取全部正文。
+- 新增、编辑、移动、用途切换沿用现有五个 HTTP 接口与文件存储。失败保留草稿；面板内切换前提示未保存修改；切换宿主页面后在同一入口恢复本浏览器会话内的草稿（不跨刷新/重启）；删除必须确认，且 **没有撤销或自动恢复**。
+- 嵌套但未登记的范围只显示摘要，不放宽文件访问权限。手工文件标题超过 60、正文超过 20000 字符时保留完整显示并提示外部编辑，不静默截断。
+- 窄屏和设置页采用列表/详情切换；支持键盘操作及宿主深浅主题。`serviceAnchor` 只标为“服务启动目录”，不是当前会话工作区。
+- `stats.entries` 是索引行数，`indexBytes` 是索引字节，`memoryFiles` 包含历史资料；这些统计不表示本会话注入量、访问次数或 token 消耗。当前接口无 revision/ETag，保存不提供跨窗口冲突合并，请先刷新核对外部修改。
+
+此版本仅升级管理界面，不新增整理记忆入口或 `/dream` 功能，不改变已有技能、五个模型工具、作用域隔离和 reference 不常驻规则；没有后台 AI、图谱、新数据库或数据迁移。
 
 ### 按需整理 / On-demand consolidation
 
