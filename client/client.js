@@ -194,6 +194,202 @@ window.__ModuleLoader__.load({
 			}
 		};
 		//#endregion
+		//#region src/client/Overview.ts
+		function percent(value, total) {
+			return total > 0 ? Math.max(0, Math.min(100, value / total * 100)) : 0;
+		}
+		const number = (n) => n.toLocaleString();
+		const percentText = (n, total) => `${percent(n, total).toFixed(1)}%`;
+		function LineIcon({ type }) {
+			return (0, react.createElement)("svg", {
+				width: 22,
+				height: 22,
+				viewBox: "0 0 24 24",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: 1.6,
+				strokeLinecap: "round",
+				strokeLinejoin: "round",
+				"aria-hidden": true
+			}, (0, react.createElement)("path", { d: {
+				folder: "M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10H3Z",
+				user: "M16 7a4 4 0 1 1-8 0a4 4 0 0 1 8 0ZM4 21v-3a8 8 0 0 1 16 0v3",
+				file: "M5 3h9l5 5v13H5ZM14 3v6h5M8 13h8M8 17h6",
+				book: "M4 4h16v17l-8-4-8 4Z"
+			}[type] }));
+		}
+		/** Binary area subdivision: unlike equal-sized cards, every nonzero tile has exact count-proportional area. */
+		function scopeTiles(items) {
+			const positive = items.filter((item) => item.count > 0).sort((a, b) => b.count - a.count);
+			function split(rows, x, y, width, height) {
+				if (rows.length === 0) return [];
+				if (rows.length === 1) return [{
+					key: rows[0].key,
+					x,
+					y,
+					width,
+					height
+				}];
+				const total = rows.reduce((sum, row) => sum + row.count, 0);
+				let cut = 1, sum = rows[0].count;
+				while (cut < rows.length - 1 && Math.abs(sum + rows[cut].count - total / 2) < Math.abs(sum - total / 2)) sum += rows[cut++].count;
+				const ratio = sum / total;
+				return width >= height ? [...split(rows.slice(0, cut), x, y, width * ratio, height), ...split(rows.slice(cut), x + width * ratio, y, width * (1 - ratio), height)] : [...split(rows.slice(0, cut), x, y, width, height * ratio), ...split(rows.slice(cut), x, y + height * ratio, width, height * (1 - ratio))];
+			}
+			return split(positive, 0, 0, 100, 100);
+		}
+		function Overview({ scopes, entries, disabled, chart, setChart, filter, setFilter, onOpen, onCreate }) {
+			const counts = countKinds(entries);
+			const unknown = counts.all - counts.memory - counts.reference;
+			const rows = scopes.map((scope) => ({
+				...scope,
+				rows: entries.filter((entry) => scopeKey(entry.target) === scope.key)
+			}));
+			const sorted = [...rows].sort((a, b) => b.rows.length - a.rows.length);
+			const max = Math.max(0, ...sorted.map((item) => item.rows.length));
+			const tiles = scopeTiles(sorted.map((item) => ({
+				key: item.key,
+				count: item.rows.length
+			})));
+			const m = percent(counts.memory, counts.all), r = percent(counts.reference, counts.all);
+			const open = (key, kind = "all") => onOpen(key, kind);
+			return (0, react.createElement)("div", { className: "dm-dashboard" }, (0, react.createElement)("div", { className: "dm-charts" }, (0, react.createElement)("section", {
+				className: "dsh-memory-card dm-chart",
+				"aria-label": "范围分布"
+			}, (0, react.createElement)("div", { className: "dm-section-head" }, (0, react.createElement)("h2", null, "范围分布"), (0, react.createElement)("div", {
+				className: "dm-segment",
+				"aria-label": "分布显示方式"
+			}, ...["bar", "map"].map((value) => (0, react.createElement)("button", {
+				type: "button",
+				key: value,
+				"aria-pressed": chart === value,
+				onClick: () => setChart(value)
+			}, value === "bar" ? "条形图" : "色块图")))), chart === "bar" ? (0, react.createElement)("div", { className: "dm-bars" }, sorted.map((item) => (0, react.createElement)("button", {
+				type: "button",
+				key: item.key,
+				className: "dm-bar-row",
+				disabled,
+				title: `${item.label} · ${item.target.workspace ?? "跨项目偏好"}`,
+				onClick: () => open(item.key),
+				"aria-label": `${item.label}，${item.rows.length} 条，查看记录`
+			}, (0, react.createElement)("span", { className: "dm-bar-label" }, item.label), (0, react.createElement)("span", {
+				className: "dm-bar-track",
+				"aria-hidden": true
+			}, (0, react.createElement)("span", {
+				className: item.target.scope === "user" ? "dm-bar-fill dm-user-fill" : "dm-bar-fill",
+				style: { width: `${percent(item.rows.length, max)}%` }
+			})), (0, react.createElement)("span", { className: "dm-tabular" }, number(item.rows.length))))) : (0, react.createElement)("div", null, counts.all === 0 ? (0, react.createElement)("p", { className: "dm-map-empty" }, "暂无记录，保存后即可查看分布") : (0, react.createElement)("div", {
+				className: "dm-map",
+				"aria-label": "色块面积表示记录数量"
+			}, tiles.map((tile, i) => {
+				const item = rows.find((row) => row.key === tile.key);
+				return (0, react.createElement)("button", {
+					key: tile.key,
+					type: "button",
+					className: `dm-map-tile dm-map-color-${i % 4}`,
+					disabled,
+					onClick: () => open(item.key),
+					style: {
+						left: `${tile.x}%`,
+						top: `${tile.y}%`,
+						width: `${tile.width}%`,
+						height: `${tile.height}%`
+					},
+					title: `${item.label} · ${item.rows.length} 条`,
+					"aria-label": `${item.label}，${item.rows.length} 条，查看记录`
+				}, (0, react.createElement)("strong", null, item.label), (0, react.createElement)("span", null, `${item.rows.length} 条`));
+			})), (0, react.createElement)("p", { className: "dsh-memory-muted dm-map-note" }, "色块面积表示记录数量；空范围列在下方卡片中。"))), (0, react.createElement)("section", {
+				className: "dsh-memory-card dm-chart",
+				"aria-label": "用途占比"
+			}, (0, react.createElement)("div", { className: "dm-section-head" }, (0, react.createElement)("h2", null, "用途占比")), (0, react.createElement)("div", { className: "dm-type-chart" }, (0, react.createElement)("div", {
+				className: "dm-donut",
+				role: "img",
+				"aria-label": `全部 ${counts.all} 条，长期记忆 ${counts.memory} 条，历史资料 ${counts.reference} 条${unknown ? `，未分类 ${unknown} 条` : ""}`,
+				style: { background: counts.all ? `conic-gradient(var(--dm-memory) 0% ${m}%,var(--dm-reference) ${m}% ${m + r}%,var(--dm-track) ${m + r}% 100%)` : "var(--dm-track)" }
+			}, (0, react.createElement)("div", null, (0, react.createElement)("strong", null, number(counts.all)), (0, react.createElement)("span", null, "全部记录"))), (0, react.createElement)("div", { className: "dm-legend" }, ["memory", "reference"].map((kind) => (0, react.createElement)("button", {
+				type: "button",
+				key: kind,
+				disabled,
+				onClick: () => open("all", kind)
+			}, (0, react.createElement)("i", {
+				className: `dm-dot dm-${kind}`,
+				"aria-hidden": true
+			}), (0, react.createElement)("span", null, kind === "memory" ? "长期记忆" : "历史资料"), (0, react.createElement)("strong", null, number(counts[kind])), (0, react.createElement)("span", null, percentText(counts[kind], counts.all)))), unknown > 0 ? (0, react.createElement)("span", { className: "dsh-memory-muted" }, `未分类 ${unknown} 条`) : null)))), (0, react.createElement)("section", {
+				className: "dm-spaces",
+				"aria-label": "记忆空间"
+			}, (0, react.createElement)("div", { className: "dm-section-head dm-space-head" }, (0, react.createElement)("h2", null, "记忆空间"), (0, react.createElement)("div", {
+				className: "dm-segment",
+				"aria-label": "空间范围"
+			}, ...[
+				"all",
+				"user",
+				"project"
+			].map((value) => (0, react.createElement)("button", {
+				key: value,
+				type: "button",
+				"aria-pressed": filter === value,
+				onClick: () => setFilter(value)
+			}, value === "all" ? "全部范围" : value === "user" ? "用户记忆" : "项目记忆"))), (0, react.createElement)("button", {
+				type: "button",
+				className: "dm-text-button",
+				disabled,
+				onClick: () => open("all")
+			}, "查看全部记录 →")), (0, react.createElement)("div", { className: "dm-space-grid" }, rows.filter((item) => filter === "all" || item.target.scope === filter).map((item) => {
+				const c = countKinds(item.rows), stats = item.stats;
+				const capacity = stats === void 0 ? null : percent(stats.indexBytes, stats.maxBytes);
+				return (0, react.createElement)("article", {
+					key: item.key,
+					className: "dsh-memory-card dm-space-card"
+				}, (0, react.createElement)("button", {
+					type: "button",
+					className: "dm-space-title",
+					disabled,
+					onClick: () => open(item.key),
+					title: item.target.workspace ?? "跨项目偏好"
+				}, (0, react.createElement)(LineIcon, { type: item.target.scope === "user" ? "user" : "folder" }), (0, react.createElement)("h3", null, item.label), (0, react.createElement)("strong", { className: "dm-tabular" }, `${c.all} 条`)), !item.available || item.nested ? (0, react.createElement)("p", { className: "dm-scope-status" }, !item.available ? "暂不可用" : "嵌套范围 · 只读摘要") : null, (0, react.createElement)("div", {
+					className: "dm-composition",
+					"aria-hidden": true
+				}, (0, react.createElement)("span", {
+					className: "dm-memory",
+					style: { width: `${percent(c.memory, c.all)}%` }
+				}), (0, react.createElement)("span", {
+					className: "dm-reference",
+					style: { width: `${percent(c.reference, c.all)}%` }
+				})), (0, react.createElement)("div", { className: "dm-kind-counts" }, (0, react.createElement)("span", null, (0, react.createElement)("i", {
+					className: "dm-dot dm-memory",
+					"aria-hidden": true
+				}), `长期记忆 ${c.memory}`), (0, react.createElement)("span", null, (0, react.createElement)("i", {
+					className: "dm-dot dm-reference",
+					"aria-hidden": true
+				}), `历史资料 ${c.reference}`), c.all > c.memory + c.reference ? (0, react.createElement)("span", null, `未分类 ${c.all - c.memory - c.reference}`) : null), (0, react.createElement)("div", { className: "dm-previews" }, c.all === 0 ? (0, react.createElement)("div", { className: "dm-card-empty" }, (0, react.createElement)(LineIcon, { type: "file" }), (0, react.createElement)("span", null, item.available ? "暂无记忆" : "此范围暂不可用"), item.available && !item.nested ? (0, react.createElement)("button", {
+					type: "button",
+					className: "dm-text-button",
+					disabled,
+					onClick: () => onCreate(item.key)
+				}, "新增第一条记录") : null) : item.rows.slice(0, 2).map((entry) => (0, react.createElement)("div", {
+					className: "dm-preview",
+					key: entry.key,
+					title: entry.excerpt || entry.title
+				}, (0, react.createElement)(LineIcon, { type: "file" }), (0, react.createElement)("span", { className: "dm-preview-copy" }, (0, react.createElement)("span", { className: "dm-preview-title" }, entry.title), entry.excerpt ? (0, react.createElement)("small", { className: "dm-preview-excerpt" }, entry.excerpt) : null), entry.tags[0] ? (0, react.createElement)("span", { className: "dm-preview-tag" }, entry.tags[0]) : null))), (0, react.createElement)("div", { className: "dm-card-footer" }, (0, react.createElement)("div", {
+					className: "dm-capacity",
+					title: stats ? `索引行 ${stats.entries} / ${stats.maxEntries}；文件 ${stats.memoryFiles} / ${stats.maxMemories}（含历史资料）` : void 0
+				}, (0, react.createElement)("span", null, stats ? `索引 ${(stats.indexBytes / 1024).toFixed(1)} / ${(stats.maxBytes / 1024).toFixed(0)} KB` : "容量暂不可用"), capacity === null ? null : (0, react.createElement)("div", {
+					className: `dm-capacity-track${capacity >= 90 ? " dm-capacity-warning" : ""}`,
+					role: "progressbar",
+					"aria-label": `${item.label}索引容量`,
+					"aria-valuenow": stats.indexBytes,
+					"aria-valuemin": 0,
+					"aria-valuemax": Math.max(stats.maxBytes, stats.indexBytes),
+					"aria-valuetext": `${stats.indexBytes} / ${stats.maxBytes} 字节`
+				}, (0, react.createElement)("span", { style: { width: `${capacity}%` } }))), (0, react.createElement)("button", {
+					type: "button",
+					className: "dm-text-button",
+					disabled,
+					onClick: () => open(item.key)
+				}, "查看记录 →")));
+			}))));
+		}
+		//#endregion
 		//#region src/client/styles.ts
 		/** Local styles only: no host body, composer or generic theme mutations. */
 		const memoryStyles = `
@@ -282,6 +478,88 @@ window.__ModuleLoader__.load({
 @container (max-width:1000px) { .dsh-memory-workbench { grid-template-columns:160px minmax(0,1fr); } .dsh-memory-detail { display:none; } .dsh-memory-has-detail .dsh-memory-detail { display:flex; } .dsh-memory-has-detail .dsh-memory-list { display:none; } .dsh-memory-back { display:inline-block; } }
 @container (max-width:580px) { .dsh-memory-header { align-items:flex-start; flex-direction:column; gap:10px; } .dsh-memory-overview { gap:6px; } .dsh-memory-stat { padding:12px 9px; gap:5px; } .dsh-memory-stat-icon { display:none; } .dsh-memory-stat-value { font-size:23px; } .dsh-memory-stat-label { font-size:10px; } .dsh-memory-workbench,.dsh-memory-settings .dsh-memory-workbench { display:flex; flex-direction:column; min-height:0; } .dsh-memory-nav { width:100%; padding:10px; } .dsh-memory-scope-list { display:flex; gap:4px; overflow:auto; } .dsh-memory-scope { width:auto; min-width:110px; max-width:190px; flex-shrink:0; margin:0; padding:8px; } .dsh-memory-eyebrow,.dsh-memory-nav-group { display:none; } .dsh-memory-capacity { padding:8px 0 0; margin-top:8px; } .dsh-memory-fields-row { grid-template-columns:1fr; } .dsh-memory-detail-head,.dsh-memory-detail-body { padding:14px; } .dsh-memory-entries { max-height:none; } }
 @media (prefers-reduced-motion:no-preference) { .dsh-memory-button,.dsh-memory-entry,.dsh-memory-scope { transition:background 100ms ease; } }
+
+/* Global dashboard: use the host's theme and keep all body reads in the detail view. */
+.dsh-memory { --dm-memory:#0d9fa6; --dm-reference:#8b65d8; --dm-project:#438ee8; --dm-track:color-mix(in srgb,var(--dm-muted) 12%,var(--dm-card)); }
+.dm-overview-four { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.dsh-memory-workbench { grid-template-columns:180px minmax(0,1fr); }
+.dsh-memory-workbench.dsh-memory-has-detail { grid-template-columns:180px minmax(260px,.9fr) minmax(320px,1.25fr); }
+.dsh-memory-settings .dsh-memory-workbench.dsh-memory-has-detail { grid-template-columns:160px minmax(0,1fr); }
+.dsh-memory-back { display:inline-block; }
+.dm-page-nav { display:flex; gap:6px; margin:0 0 14px; }
+.dm-page-nav [aria-current=page] { background:var(--dm-soft); color:var(--dm-accent); border-color:transparent; }
+.dm-global-search { display:flex; gap:6px; }
+.dm-global-search input { width:clamp(180px,23vw,360px); min-width:0; border:1px solid var(--dm-border); border-radius:8px; background:var(--dm-card); padding:8px 10px; }
+.dm-charts { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr); gap:14px; margin-bottom:20px; }
+.dm-chart { padding:18px; }
+.dm-section-head { display:flex; align-items:center; gap:14px; justify-content:space-between; margin-bottom:16px; }
+.dm-section-head h2 { margin:0; font-size:16px; font-weight:650; }
+.dm-segment { display:flex; flex-wrap:wrap; gap:4px; }
+.dm-segment button { background:transparent; border:1px solid var(--dm-border); border-radius:7px; padding:5px 10px; color:var(--dm-muted); white-space:nowrap; }
+.dm-segment button[aria-pressed=true] { background:var(--dm-soft); color:var(--dm-accent); border-color:color-mix(in srgb,var(--dm-accent) 30%,var(--dm-border)); }
+.dm-bars { max-height:250px; overflow:auto; padding-right:4px; }
+.dm-bar-row { width:100%; display:grid; grid-template-columns:minmax(90px,145px) minmax(0,1fr) 40px; align-items:center; gap:12px; border:0; background:transparent; padding:7px 0; text-align:left; }
+.dm-bar-row:hover { color:var(--dm-accent); }
+.dm-bar-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dm-bar-track { display:block; height:14px; background:var(--dm-track); border-radius:4px; overflow:hidden; }
+.dm-bar-fill { display:block; height:100%; background:var(--dm-project); border-radius:4px; }
+.dm-user-fill { background:var(--dm-memory); }
+.dm-tabular { font-variant-numeric:tabular-nums; }
+.dm-map { height:230px; position:relative; border-radius:8px; overflow:hidden; background:var(--dm-track); }
+.dm-map-tile { position:absolute; border:2px solid var(--dm-card); padding:8px; display:flex; flex-direction:column; justify-content:center; gap:4px; overflow:hidden; text-align:left; color:var(--dm-text); }
+.dm-map-tile strong,.dm-map-tile span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dm-map-color-0 { background:color-mix(in srgb,var(--dm-memory) 25%,var(--dm-card)); }
+.dm-map-color-1 { background:color-mix(in srgb,var(--dm-project) 25%,var(--dm-card)); }
+.dm-map-color-2 { background:color-mix(in srgb,var(--dm-reference) 25%,var(--dm-card)); }
+.dm-map-color-3 { background:color-mix(in srgb,var(--dm-accent) 25%,var(--dm-card)); }
+.dm-map-tile:hover { filter:brightness(.96); }
+.dm-map-empty { min-height:190px; display:grid; place-content:center; color:var(--dm-muted); }
+.dm-map-note { margin:8px 0 0!important; font-size:11px; }
+.dm-type-chart { min-height:210px; display:flex; align-items:center; justify-content:center; gap:24px; flex-wrap:wrap; }
+.dm-donut { width:160px; height:160px; border-radius:50%; display:grid; place-items:center; flex-shrink:0; }
+.dm-donut>div { width:112px; height:112px; border-radius:50%; background:var(--dm-card); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; }
+.dm-donut strong { font-size:29px; font-variant-numeric:tabular-nums; }
+.dm-donut span { font-size:12px; color:var(--dm-muted); }
+.dm-legend { display:flex; flex-direction:column; gap:15px; }
+.dm-legend button { display:flex; gap:10px; align-items:center; border:0; padding:3px; background:transparent; }
+.dm-legend button:hover { color:var(--dm-accent); }
+.dm-legend button>span:last-child { color:var(--dm-muted); font-variant-numeric:tabular-nums; min-width:42px; }
+.dm-dot { display:inline-block; width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.dm-memory { background:var(--dm-memory); }
+.dm-reference { background:var(--dm-reference); }
+.dm-space-head { justify-content:flex-start; flex-wrap:wrap; }
+.dm-space-head>.dm-text-button { margin-left:auto; }
+.dm-space-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.dm-space-card { padding:16px; display:flex; flex-direction:column; transition:border-color .15s,box-shadow .15s; }
+.dm-space-card:hover { border-color:color-mix(in srgb,var(--dm-accent) 35%,var(--dm-border)); box-shadow:0 3px 12px color-mix(in srgb,var(--dm-text) 5%,transparent); }
+.dm-space-title { display:flex; align-items:center; gap:10px; padding:0; border:0; background:none; text-align:left; width:100%; margin-bottom:12px; }
+.dm-space-title svg { color:var(--dm-accent); flex-shrink:0; }
+.dm-space-title h3 { flex:1; min-width:0; font-size:14px; font-weight:650; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dm-space-title>strong { font-size:12px; white-space:nowrap; }
+.dm-scope-status { margin:-4px 0 8px!important; color:var(--dm-muted); font-size:11px; }
+.dm-composition { height:6px; border-radius:4px; overflow:hidden; display:flex; background:var(--dm-track); }
+.dm-composition span { height:100%; }
+.dm-kind-counts { display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 12px; font-size:11px; color:var(--dm-muted); }
+.dm-kind-counts>span { display:flex; align-items:center; gap:5px; }
+.dm-previews { min-height:65px; margin-bottom:12px; flex:1; }
+.dm-preview { display:flex; align-items:center; gap:7px; min-width:0; padding:4px 0; }
+.dm-preview svg { width:14px; height:14px; flex-shrink:0; color:var(--dm-muted); }
+.dm-preview-copy { flex:1; min-width:0; }
+.dm-preview-excerpt { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--dm-muted); font-size:10px; }
+.dm-preview-title { display:block; min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.dm-preview-tag { max-width:28%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:1px 5px; font-size:10px; border-radius:4px; color:var(--dm-accent); background:var(--dm-soft); }
+.dm-card-empty { display:flex; flex-wrap:wrap; min-height:65px; align-items:center; justify-content:center; gap:8px; color:var(--dm-muted); background:var(--dm-bg); border-radius:6px; }
+.dm-card-footer { display:flex; align-items:flex-end; gap:12px; }
+.dm-capacity { flex:1; min-width:0; font-size:10px; color:var(--dm-muted); }
+.dm-capacity-track { height:5px; background:var(--dm-track); border-radius:5px; overflow:hidden; margin-top:5px; }
+.dm-capacity-track>span { display:block; height:100%; background:var(--dm-memory); }
+.dm-capacity-warning>span { background:var(--dm-danger); }
+.dm-text-button { border:0; padding:0; color:var(--dm-accent); background:transparent; white-space:nowrap; font-size:12px; }
+.dsh-memory button:focus-visible,.dsh-memory input:focus-visible { outline:2px solid var(--dm-accent); outline-offset:3px; }
+@container (max-width:1100px) { .dm-space-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .dm-type-chart { gap:16px; } .dm-donut { width:132px; height:132px; } .dm-donut>div { width:92px; height:92px; } }
+@container (max-width:1000px) { .dsh-memory-workbench.dsh-memory-has-detail { grid-template-columns:160px minmax(0,1fr); } .dm-global-search input { width:180px; } }
+@container (max-width:800px) { .dm-charts { grid-template-columns:1fr; } .dm-overview-four { grid-template-columns:repeat(2,minmax(0,1fr)); } .dm-type-chart { min-height:150px; } .dsh-memory-header { flex-wrap:wrap; } .dm-global-search { flex:1; } .dm-global-search input { flex:1; width:100%; } }
+@container (max-width:580px) { .dm-space-grid { grid-template-columns:1fr; } .dm-chart { padding:14px; } .dm-section-head { flex-wrap:wrap; gap:10px; } .dm-bar-row { grid-template-columns:100px minmax(0,1fr) 30px; gap:8px; } .dsh-memory-header>.dsh-memory-actions { width:100%; flex-wrap:wrap; } .dm-global-search { flex-basis:100%; } }
 `;
 		//#endregion
 		//#region src/client/MemoryPanel.ts
@@ -300,6 +578,10 @@ window.__ModuleLoader__.load({
 			const [data, setData] = (0, react.useState)(recovered?.data ?? null);
 			const [listLoading, setListLoading] = (0, react.useState)(true);
 			const [listError, setListError] = (0, react.useState)(null);
+			const [view, setView] = (0, react.useState)(recovered !== void 0 || mode === "settings" ? "records" : "overview");
+			const [chart, setChart] = (0, react.useState)("bar");
+			const [spaceFilter, setSpaceFilter] = (0, react.useState)("all");
+			const [overviewQuery, setOverviewQuery] = (0, react.useState)("");
 			const [scope, setScope] = (0, react.useState)(recovered?.scope ?? "all");
 			const [kind, setKind] = (0, react.useState)(recovered?.kind ?? "all");
 			const [query, setQuery] = (0, react.useState)(recovered?.query ?? "");
@@ -482,14 +764,30 @@ window.__ModuleLoader__.load({
 				setNotice(null);
 				readEntry(entry);
 			}
+			function openRecords(next, purpose = "all", search = "") {
+				if (!mayLeave()) return;
+				resetDetail();
+				setScope(next);
+				setKind(purpose);
+				setQuery(search);
+				setView("records");
+				setNotice(null);
+			}
+			function returnOverview() {
+				if (!mayLeave()) return;
+				resetDetail();
+				setView("overview");
+			}
 			function chooseScope(next) {
 				if (next === scope || !mayLeave()) return;
 				resetDetail();
 				setScope(next);
 				setNotice(null);
 			}
-			function beginCreate() {
-				if (!canCreate || !mayLeave()) return;
+			function beginCreate(target = defaultTarget) {
+				if (target === void 0 || !target.available || target.nested || !mayLeave()) return;
+				setView("records");
+				setScope(target.key);
 				resetDetail();
 				const empty = {
 					title: "",
@@ -497,7 +795,7 @@ window.__ModuleLoader__.load({
 					tags: "",
 					path: "",
 					kind: kind === "reference" ? "reference" : "memory",
-					target: defaultTarget.target
+					target: target.target
 				};
 				setDraft(empty);
 				setOriginal(empty);
@@ -657,27 +955,65 @@ window.__ModuleLoader__.load({
 			return (0, react.createElement)("section", {
 				className: `dsh-memory dsh-memory-${mode}`,
 				"aria-label": "记忆管理"
-			}, (0, react.createElement)("style", null, memoryStyles), (0, react.createElement)("header", { className: "dsh-memory-header" }, (0, react.createElement)("div", null, (0, react.createElement)("h1", { className: "dsh-memory-heading" }, "记忆管理"), (0, react.createElement)("p", { className: "dsh-memory-subtitle" }, "跨项目偏好、项目决定与历史资料，在一处清晰管理。")), (0, react.createElement)("div", { className: "dsh-memory-actions" }, button(listLoading ? "刷新中…" : "刷新", () => {
+			}, (0, react.createElement)("style", null, memoryStyles), (0, react.createElement)("header", { className: "dsh-memory-header" }, (0, react.createElement)("div", null, (0, react.createElement)("h1", { className: "dsh-memory-heading" }, mode === "page" && view === "overview" ? "记忆总览" : "记忆管理"), (0, react.createElement)("p", { className: "dsh-memory-subtitle" }, "跨项目偏好、项目决定与历史资料，在一处清晰管理。")), (0, react.createElement)("div", { className: "dsh-memory-actions" }, mode === "page" && view === "overview" ? (0, react.createElement)("form", {
+				className: "dm-global-search",
+				onSubmit: (event) => {
+					event.preventDefault();
+					openRecords("all", "all", overviewQuery);
+				}
+			}, (0, react.createElement)("input", {
+				type: "search",
+				value: overviewQuery,
+				onChange: (event) => setOverviewQuery(event.target.value),
+				placeholder: "搜索标题、摘要、标签或路径",
+				"aria-label": "搜索全部记忆索引"
+			}), (0, react.createElement)("button", {
+				type: "submit",
+				className: "dsh-memory-button",
+				disabled: busy
+			}, "搜索")) : null, button(listLoading ? "刷新中…" : "刷新", () => {
 				refresh();
 			}, {
 				disabled: busy || listLoading,
 				"aria-label": "刷新记忆列表"
-			}), button("新增记录", beginCreate, {
+			}), button("新增记录", () => beginCreate(), {
 				disabled: busy || !canCreate,
 				className: "dsh-memory-button dsh-memory-primary"
 			}))), (0, react.createElement)("div", {
-				className: "dsh-memory-overview",
+				className: `dsh-memory-overview${mode === "page" ? " dm-overview-four" : ""}`,
 				"aria-label": "全部范围总览"
-			}, (0, react.createElement)(Stat, {
+			}, mode === "page" ? (0, react.createElement)(Stat, {
+				label: "全部记录",
+				value: data === null ? "—" : counts.all,
+				icon: "file"
+			}) : null, (0, react.createElement)(Stat, {
 				label: "长期记忆",
-				value: data === null ? "—" : counts.memory
+				value: data === null ? "—" : counts.memory,
+				icon: "book"
 			}), (0, react.createElement)(Stat, {
 				label: "历史资料",
-				value: data === null ? "—" : counts.reference
+				value: data === null ? "—" : counts.reference,
+				icon: "file"
 			}), (0, react.createElement)(Stat, {
 				label: "项目范围",
-				value: data === null ? "—" : scopes.filter((item) => item.target.scope === "project").length
-			})), notice !== null ? status(notice) : null, listError !== null ? (0, react.createElement)("div", {
+				value: data === null ? "—" : scopes.filter((item) => item.target.scope === "project").length,
+				icon: "folder",
+				note: data === null ? void 0 : `其中 ${scopes.filter((item) => item.target.scope === "project" && entries.filter((entry) => scopeKey(entry.target) === item.key).length === 0).length} 个为空`
+			})), mode === "page" ? (0, react.createElement)("nav", {
+				className: "dm-page-nav",
+				"aria-label": "记忆页面视图"
+			}, button("全局总览", returnOverview, {
+				disabled: busy,
+				"aria-current": view === "overview" ? "page" : void 0
+			}), button("记录列表", () => {
+				if (mayLeave()) {
+					resetDetail();
+					setView("records");
+				}
+			}, {
+				disabled: busy,
+				"aria-current": view === "records" ? "page" : void 0
+			})) : null, notice !== null ? status(notice) : null, listError !== null ? (0, react.createElement)("div", {
 				className: "dsh-memory-notice dsh-memory-error",
 				role: "alert"
 			}, (0, react.createElement)("p", null, `无法加载最新列表：${listError}${data !== null ? "。下方保留上次成功加载的列表。" : "。请确认宿主已启用记忆服务。"}`), button("重试加载", () => {
@@ -685,7 +1021,17 @@ window.__ModuleLoader__.load({
 			}, { disabled: busy || listLoading })) : null, data === null ? (0, react.createElement)("div", {
 				className: "dsh-memory-card dsh-memory-empty",
 				role: "status"
-			}, listLoading ? "正在加载记忆索引…" : "记忆服务暂不可用") : (0, react.createElement)("div", { className: `dsh-memory-workbench${hasDetail ? " dsh-memory-has-detail" : ""}` }, (0, react.createElement)("nav", {
+			}, listLoading ? "正在加载记忆索引…" : "记忆服务暂不可用") : mode === "page" && view === "overview" ? (0, react.createElement)(Overview, {
+				scopes,
+				entries,
+				disabled: busy,
+				chart,
+				setChart,
+				filter: spaceFilter,
+				setFilter: setSpaceFilter,
+				onOpen: openRecords,
+				onCreate: (key) => beginCreate(scopes.find((item) => item.key === key))
+			}) : (0, react.createElement)("div", { className: `dsh-memory-workbench${hasDetail ? " dsh-memory-has-detail" : ""}` }, (0, react.createElement)("nav", {
 				className: "dsh-memory-card dsh-memory-nav",
 				"aria-label": "记忆范围"
 			}, (0, react.createElement)("p", { className: "dsh-memory-eyebrow" }, "范围"), (0, react.createElement)("div", { className: "dsh-memory-scope-list" }, (0, react.createElement)(ScopeButton, {
@@ -744,7 +1090,7 @@ window.__ModuleLoader__.load({
 			}, (0, react.createElement)("div", { className: "dsh-memory-entry-title" }, entry.title), (0, react.createElement)("div", { className: "dsh-memory-excerpt" }, entry.excerpt || "暂无摘要"), (0, react.createElement)("div", { className: "dsh-memory-entry-meta" }, (0, react.createElement)("span", { className: `dsh-memory-badge${entry.kind === "reference" ? " dsh-memory-reference" : ""}` }, kindLabel(entry.kind)), entry.unindexed ? (0, react.createElement)("span", { className: "dsh-memory-badge" }, "未索引") : null, entry.readOnly ? (0, react.createElement)("span", { className: "dsh-memory-badge" }, "只读") : null, ...entry.tags.map((tag, index) => (0, react.createElement)("span", { key: `${tag}:${index}` }, `#${tag}`))), (0, react.createElement)("span", {
 				className: "dsh-memory-entry-path",
 				title: [entry.scopeLabel, entry.path].filter(Boolean).join(" / ")
-			}, [entry.scopeLabel, entry.path].filter(Boolean).join(" / "))))))), (0, react.createElement)("section", {
+			}, [entry.scopeLabel, entry.path].filter(Boolean).join(" / "))))))), hasDetail ? (0, react.createElement)("section", {
 				className: "dsh-memory-card dsh-memory-detail",
 				"aria-label": "记录详情",
 				"aria-busy": detailLoading || busy
@@ -781,10 +1127,10 @@ window.__ModuleLoader__.load({
 				onChange: setDraft,
 				onSubmit: submit,
 				onCancel: cancelEdit
-			}) : null)))), (0, react.createElement)("p", { className: "dsh-memory-footer-note" }, "本地文件 · 无数据迁移。总览按列表用途统计，不代表本会话注入量；服务启动目录不等同于当前会话工作区。"));
+			}) : null))) : null), (0, react.createElement)("p", { className: "dsh-memory-footer-note" }, "本地文件 · 无数据迁移。总览按列表用途统计，不代表本会话注入量；服务启动目录不等同于当前会话工作区。"));
 		}
-		function Stat({ label, value }) {
-			return (0, react.createElement)("div", { className: "dsh-memory-stat" }, (0, react.createElement)("div", null, (0, react.createElement)("p", { className: "dsh-memory-stat-label" }, label), (0, react.createElement)("p", { className: "dsh-memory-stat-value" }, value)));
+		function Stat({ label, value, icon, note }) {
+			return (0, react.createElement)("div", { className: "dsh-memory-stat" }, icon ? (0, react.createElement)("span", { className: "dsh-memory-stat-icon" }, (0, react.createElement)(LineIcon, { type: icon })) : null, (0, react.createElement)("div", null, (0, react.createElement)("p", { className: "dsh-memory-stat-label" }, label), (0, react.createElement)("p", { className: "dsh-memory-stat-value" }, value), note ? (0, react.createElement)("small", { className: "dsh-memory-muted" }, note) : null));
 		}
 		function ScopeButton({ label, count, active, disabled, note, title, onClick }) {
 			return (0, react.createElement)("button", {

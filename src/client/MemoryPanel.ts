@@ -3,6 +3,7 @@ import type { ChangeEvent, FormEvent, ReactElement } from 'react'
 import { memoryApi } from './api.js'
 import { countKinds, dirtyDraft, draftOf, entriesOf, entryKey, filterEntries, normalizeId, scopeKey, scopesOf, validateDraft } from './model.js'
 import type { EntryView, MemoryDetail, MemoryDraft, MemoryKind, PanelData, SaveTarget, ScopeView } from './model.js'
+import { Overview, LineIcon } from './Overview.js'
 import { memoryStyles } from './styles.js'
 
 const kindLabel = (kind?: MemoryKind): string => kind === 'reference' ? '历史资料' : '长期记忆'
@@ -33,6 +34,10 @@ export function MemoryPanel({ mode = 'settings' }: { mode?: PanelMode }): ReactE
   const [data, setData] = useState<PanelData | null>(recovered?.data ?? null)
   const [listLoading, setListLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
+  const [view, setView] = useState<'overview' | 'records'>(recovered !== undefined || mode === 'settings' ? 'records' : 'overview')
+  const [chart, setChart] = useState<'bar' | 'map'>('bar')
+  const [spaceFilter, setSpaceFilter] = useState<'all' | 'user' | 'project'>('all')
+  const [overviewQuery, setOverviewQuery] = useState('')
   const [scope, setScope] = useState(recovered?.scope ?? 'all')
   const [kind, setKind] = useState<MemoryKind | 'all'>(recovered?.kind ?? 'all')
   const [query, setQuery] = useState(recovered?.query ?? '')
@@ -186,6 +191,22 @@ export function MemoryPanel({ mode = 'settings' }: { mode?: PanelMode }): ReactE
     void readEntry(entry)
   }
 
+  function openRecords(next: string, purpose: MemoryKind | 'all' = 'all', search = ''): void {
+    if (!mayLeave()) return
+    resetDetail()
+    setScope(next)
+    setKind(purpose)
+    setQuery(search)
+    setView('records')
+    setNotice(null)
+  }
+
+  function returnOverview(): void {
+    if (!mayLeave()) return
+    resetDetail()
+    setView('overview')
+  }
+
   function chooseScope(next: string): void {
     if (next === scope || !mayLeave()) return
     resetDetail()
@@ -193,10 +214,12 @@ export function MemoryPanel({ mode = 'settings' }: { mode?: PanelMode }): ReactE
     setNotice(null)
   }
 
-  function beginCreate(): void {
-    if (!canCreate || !mayLeave()) return
+  function beginCreate(target: ScopeView | undefined = defaultTarget): void {
+    if (target === undefined || !target.available || target.nested || !mayLeave()) return
+    setView('records')
+    setScope(target.key)
     resetDetail()
-    const empty: MemoryDraft = { title: '', content: '', tags: '', path: '', kind: kind === 'reference' ? 'reference' : 'memory', target: defaultTarget.target }
+    const empty: MemoryDraft = { title: '', content: '', tags: '', path: '', kind: kind === 'reference' ? 'reference' : 'memory', target: target.target }
     setDraft(empty)
     setOriginal(empty)
     setCreating(true)
@@ -327,19 +350,23 @@ export function MemoryPanel({ mode = 'settings' }: { mode?: PanelMode }): ReactE
   return h('section', { className: `dsh-memory dsh-memory-${mode}`, 'aria-label': '记忆管理' },
     h('style', null, memoryStyles),
     h('header', { className: 'dsh-memory-header' },
-      h('div', null, h('h1', { className: 'dsh-memory-heading' }, '记忆管理'), h('p', { className: 'dsh-memory-subtitle' }, '跨项目偏好、项目决定与历史资料，在一处清晰管理。')),
+      h('div', null, h('h1', { className: 'dsh-memory-heading' }, mode === 'page' && view === 'overview' ? '记忆总览' : '记忆管理'), h('p', { className: 'dsh-memory-subtitle' }, '跨项目偏好、项目决定与历史资料，在一处清晰管理。')),
       h('div', { className: 'dsh-memory-actions' },
+        mode === 'page' && view === 'overview' ? h('form', { className: 'dm-global-search', onSubmit: (event: FormEvent) => { event.preventDefault(); openRecords('all', 'all', overviewQuery) } }, h('input', { type: 'search', value: overviewQuery, onChange: (event: ChangeEvent<HTMLInputElement>) => setOverviewQuery(event.target.value), placeholder: '搜索标题、摘要、标签或路径', 'aria-label': '搜索全部记忆索引' }), h('button', { type: 'submit', className: 'dsh-memory-button', disabled: busy }, '搜索')) : null,
         button(listLoading ? '刷新中…' : '刷新', () => { void refresh() }, { disabled: busy || listLoading, 'aria-label': '刷新记忆列表' }),
-        button('新增记录', beginCreate, { disabled: busy || !canCreate, className: 'dsh-memory-button dsh-memory-primary' }))),
-    h('div', { className: 'dsh-memory-overview', 'aria-label': '全部范围总览' },
-      h(Stat, { label: '长期记忆', value: data === null ? '—' : counts.memory }),
-      h(Stat, { label: '历史资料', value: data === null ? '—' : counts.reference }),
-      h(Stat, { label: '项目范围', value: data === null ? '—' : scopes.filter(item => item.target.scope === 'project').length })),
+        button('新增记录', () => beginCreate(), { disabled: busy || !canCreate, className: 'dsh-memory-button dsh-memory-primary' }))),
+    h('div', { className: `dsh-memory-overview${mode === 'page' ? ' dm-overview-four' : ''}`, 'aria-label': '全部范围总览' },
+      mode === 'page' ? h(Stat, { label: '全部记录', value: data === null ? '—' : counts.all, icon: 'file' }) : null,
+      h(Stat, { label: '长期记忆', value: data === null ? '—' : counts.memory, icon: 'book' }),
+      h(Stat, { label: '历史资料', value: data === null ? '—' : counts.reference, icon: 'file' }),
+      h(Stat, { label: '项目范围', value: data === null ? '—' : scopes.filter(item => item.target.scope === 'project').length, icon: 'folder', note: data === null ? undefined : `其中 ${scopes.filter(item => item.target.scope === 'project' && entries.filter(entry => scopeKey(entry.target) === item.key).length === 0).length} 个为空` })),
+    mode === 'page' ? h('nav', { className: 'dm-page-nav', 'aria-label': '记忆页面视图' }, button('全局总览', returnOverview, { disabled: busy, 'aria-current': view === 'overview' ? 'page' : undefined }), button('记录列表', () => { if (mayLeave()) { resetDetail(); setView('records') } }, { disabled: busy, 'aria-current': view === 'records' ? 'page' : undefined })) : null,
     notice !== null ? status(notice) : null,
     listError !== null ? h('div', { className: 'dsh-memory-notice dsh-memory-error', role: 'alert' },
       h('p', null, `无法加载最新列表：${listError}${data !== null ? '。下方保留上次成功加载的列表。' : '。请确认宿主已启用记忆服务。'}`),
       button('重试加载', () => { void loadList() }, { disabled: busy || listLoading })) : null,
     data === null ? h('div', { className: 'dsh-memory-card dsh-memory-empty', role: 'status' }, listLoading ? '正在加载记忆索引…' : '记忆服务暂不可用') :
+      mode === 'page' && view === 'overview' ? h(Overview, { scopes, entries, disabled: busy, chart, setChart, filter: spaceFilter, setFilter: setSpaceFilter, onOpen: openRecords, onCreate: (key: string) => beginCreate(scopes.find(item => item.key === key)) }) :
       h('div', { className: `dsh-memory-workbench${hasDetail ? ' dsh-memory-has-detail' : ''}` },
         h('nav', { className: 'dsh-memory-card dsh-memory-nav', 'aria-label': '记忆范围' },
           h('p', { className: 'dsh-memory-eyebrow' }, '范围'),
@@ -372,7 +399,7 @@ export function MemoryPanel({ mode = 'settings' }: { mode?: PanelMode }): ReactE
                   entry.readOnly ? h('span', { className: 'dsh-memory-badge' }, '只读') : null,
                   ...entry.tags.map((tag, index) => h('span', { key: `${tag}:${index}` }, `#${tag}`))),
                 h('span', { className: 'dsh-memory-entry-path', title: [entry.scopeLabel, entry.path].filter(Boolean).join(' / ') }, [entry.scopeLabel, entry.path].filter(Boolean).join(' / '))))))),
-        h('section', { className: 'dsh-memory-card dsh-memory-detail', 'aria-label': '记录详情', 'aria-busy': detailLoading || busy },
+        hasDetail ? h('section', { className: 'dsh-memory-card dsh-memory-detail', 'aria-label': '记录详情', 'aria-busy': detailLoading || busy },
           !hasDetail ? h('div', { className: 'dsh-memory-empty' },  h('strong', null, '选择一条记录'), h('p', null, '按需读取完整正文，再编辑、移动或修改用途。'), h('p', { className: 'dsh-memory-muted' }, '历史资料不会进入常驻记忆索引。')) :
             h('div', null,
               h('div', { className: 'dsh-memory-detail-head' },
@@ -391,12 +418,12 @@ export function MemoryPanel({ mode = 'settings' }: { mode?: PanelMode }): ReactE
                   h('p', { className: 'dsh-memory-detail-path' }, `${selected?.target.scope === 'user' ? '用户范围' : selected?.target.workspace ?? '项目范围'} · memories/${normalizeId(detail.id)}.md${detail.path ? ` · 路径标签：${detail.path}` : ''}`),
                   h('hr', { style: { border: 0, borderTop: '1px solid var(--dm-border)', margin: '16px 0' } }),
                   h('pre', { className: 'dsh-memory-content' }, detail.content)) : null,
-                editing && draft !== null ? h(DraftForm, { draft, targets, busy, creating, titleRef: titleInput, onChange: setDraft, onSubmit: submit, onCancel: cancelEdit }) : null)))),
+                editing && draft !== null ? h(DraftForm, { draft, targets, busy, creating, titleRef: titleInput, onChange: setDraft, onSubmit: submit, onCancel: cancelEdit }) : null))) : null),
     h('p', { className: 'dsh-memory-footer-note' }, '本地文件 · 无数据迁移。总览按列表用途统计，不代表本会话注入量；服务启动目录不等同于当前会话工作区。'))
 }
 
-function Stat({ label, value }: { label: string, value: number | string }): ReactElement {
-  return h('div', { className: 'dsh-memory-stat' }, h('div', null, h('p', { className: 'dsh-memory-stat-label' }, label), h('p', { className: 'dsh-memory-stat-value' }, value)))
+function Stat({ label, value, icon, note }: { label: string, value: number | string, icon?: 'file' | 'book' | 'folder', note?: string }): ReactElement {
+  return h('div', { className: 'dsh-memory-stat' }, icon ? h('span', { className: 'dsh-memory-stat-icon' }, h(LineIcon, { type: icon })) : null, h('div', null, h('p', { className: 'dsh-memory-stat-label' }, label), h('p', { className: 'dsh-memory-stat-value' }, value), note ? h('small', { className: 'dsh-memory-muted' }, note) : null))
 }
 
 function ScopeButton({ label, count, active, disabled, note, title, onClick }: { label: string, count: number, active: boolean, disabled: boolean, note?: string, title?: string, onClick: () => void }): ReactElement {
@@ -425,3 +452,4 @@ function DraftForm({ draft, targets, busy, creating, titleRef, onChange, onSubmi
     h('div', { className: 'dsh-memory-actions' }, h('button', { type: 'submit', className: 'dsh-memory-button dsh-memory-primary', disabled: busy || errors.length > 0 }, busy ? '正在保存…' : creating ? '保存记录' : '保存修改'), button('取消', onCancel, { disabled: busy })),
     h('p', { className: 'dsh-memory-muted' }, '保存会沿用现有文件与备份规则，不提供跨窗口冲突合并。'))
 }
+

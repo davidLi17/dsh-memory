@@ -34,7 +34,7 @@ async function harness() {
     get text() { return content(renderer.toJSON()) },
     button(label) { return renderer.root.findAllByType('button').find(node => content(node.props.children) === label) },
     async click(label) { const button = this.button(label); assert.ok(button, `missing button ${label}`); await act(async () => { button.props.onClick() }) },
-    async select(id) { const button = renderer.root.findAllByType('button').find(node => node.props.className === 'dsh-memory-entry' && content(node.props.children).includes(`Record ${id}`)); assert.ok(button); await act(async () => { button.props.onClick() }) },
+    async select(id) { if (this.button('记录列表')?.props['aria-current'] !== 'page' && this.button('记录列表')) await this.click('记录列表'); const button = renderer.root.findAllByType('button').find(node => node.props.className === 'dsh-memory-entry' && content(node.props.children).includes(`Record ${id}`)); assert.ok(button); await act(async () => { button.props.onClick() }) },
     async editTitle(value) { const input = renderer.root.findAllByType('input').find(node => node.props.placeholder === '简短、可辨认的标题'); assert.ok(input); await act(async () => { input.props.onChange({ target: { value } }) }) },
     async editContent(value) { await act(async () => { renderer.root.findByType('textarea').props.onChange({ target: { value } }) }) },
     async submit() { await act(async () => { await renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }) }) },
@@ -226,5 +226,87 @@ test('delete cancellation makes no request, and valid ids remain deletable when 
   assert.equal(app.requests.filter(request => request.url.endsWith('/delete')).length, 1)
   assert.ok(app.text.includes('此操作无法撤销'))
   assert.ok(!app.text.includes('Record A'))
+  await app.unmount()
+})
+
+
+
+test('dashboard defaults to real snapshot overview without fetching bodies; chart filters drill down', async () => {
+  const app = await harness()
+  assert.ok(app.text.includes('范围分布'))
+  assert.ok(app.text.includes('用途占比'))
+  assert.equal(app.root.findAll(node => node.props.className === 'dsh-memory-card dsh-memory-detail').length, 0)
+  assert.equal(app.requests.length, 1)
+  await app.click('色块图')
+  assert.equal(app.root.findAll(node => node.props.className?.startsWith?.('dm-map-tile')).length, 1)
+  const scope = app.root.findAllByType('button').find(node => node.props['aria-label'] === '用户记忆，2 条，查看记录')
+  await act(async () => scope.props.onClick())
+  assert.equal(app.requests.length, 1)
+  assert.equal(app.root.findAll(node => node.props.className === 'dsh-memory-entry').length, 2)
+  await app.select('A')
+  assert.equal(app.requests.length, 2)
+  await app.click('返回列表')
+  assert.equal(app.root.findAll(node => node.props.className === 'dsh-memory-card dsh-memory-detail').length, 0)
+  await app.unmount()
+})
+
+test('dashboard empty/unavailable scopes and unknown kinds stay honest and finite', async () => {
+  const app = await harness()
+  app.handler = async () => response({ scopes: { user: { available: false }, projects: [{ root: '/empty', name: 'Empty', serviceAnchor: false, stats: { ...stats, entries: 0, indexBytes: 0, maxBytes: 0, memoryFiles: 0 }, entries: [] }] } })
+  await app.click('刷新')
+  assert.ok(app.text.includes('其中 1 个为空'))
+  assert.ok(app.text.includes('暂无记忆'))
+  assert.ok(app.text.includes('暂不可用'))
+  await app.click('色块图')
+  assert.ok(app.text.includes('暂无记录，保存后即可查看分布'))
+  for (const node of app.root.findAll(node => node.props.style)) assert.ok(!JSON.stringify(node.props.style).includes('NaN'))
+  await app.unmount()
+})
+
+test('dashboard global search uses existing index filter and returning from detail preserves it', async () => {
+  const app = await harness()
+  const input = app.root.findByProps({ 'aria-label': '搜索全部记忆索引' })
+  await act(async () => input.props.onChange({ target: { value: 'Summary A' } }))
+  await act(async () => app.root.findByProps({ className: 'dm-global-search' }).props.onSubmit({ preventDefault() {} }))
+  assert.equal(app.root.findAll(node => node.props.className === 'dsh-memory-entry').length, 1)
+  await app.select('A')
+  await app.click('返回列表')
+  assert.equal(app.root.findByProps({ 'aria-label': '搜索记忆索引' }).props.value, 'Summary A')
+  await app.click('全局总览')
+  await app.click('记录列表')
+  assert.equal(app.root.findByProps({ 'aria-label': '搜索记忆索引' }).props.value, 'Summary A')
+  await app.unmount()
+})
+
+test('returning to overview retains chart and scope-card filters; dirty drafts block navigation', async () => {
+  const app = await harness()
+  await app.click('色块图')
+  const tabs = app.root.findByProps({ 'aria-label': '空间范围' })
+  await act(async () => tabs.findAllByType('button').find(node => content(node.props.children) === '用户记忆').props.onClick())
+  await app.click('查看全部记录 →')
+  await app.select('A')
+  await app.click('编辑 / 移动')
+  await app.editContent('keep me')
+  app.confirm = false
+  await app.click('全局总览')
+  assert.equal(app.root.findByType('textarea').props.value, 'keep me')
+  app.confirm = true
+  await app.click('全局总览')
+  assert.equal(app.button('色块图').props['aria-pressed'], true)
+  assert.equal(app.root.findByProps({ 'aria-label': '空间范围' }).findAllByType('button').find(node => content(node.props.children) === '用户记忆').props['aria-pressed'], true)
+  await app.unmount()
+})
+
+test('empty project create action targets that project and unavailable/nested scopes cannot create', async () => {
+  const app = await harness()
+  const project = { root: '/empty-project', name: 'Empty project', serviceAnchor: false, stats: { ...stats, entries: 0, indexBytes: 0, memoryFiles: 0 }, entries: [] }
+  app.handler = async () => response({ scopes: { user: { available: false }, projects: [project, { ...project, root: '/nested', name: 'Nested', nested: true }] } })
+  await app.click('刷新')
+  const createButtons = app.root.findAllByType('button').filter(node => content(node.props.children) === '新增第一条记录')
+  assert.equal(createButtons.length, 1)
+  await act(async () => createButtons[0].props.onClick())
+  const target = app.root.findAllByType('select').find(node => node.props.value.includes?.('/empty-project'))
+  assert.ok(target)
+  assert.equal(app.requests.filter(request => request.url.endsWith('/read')).length, 0)
   await app.unmount()
 })

@@ -137,3 +137,22 @@ test('API surfaces server/protocol errors and does not turn aborts into success'
   globalThis.fetch = async () => { throw new DOMException('Aborted', 'AbortError') }
   await assert.rejects(memoryApi.read(user, 'same'), { name: 'AbortError' })
 })
+
+
+test('overview treemap areas match record counts and omit zero-count scopes', async () => {
+  const source = stripTypeScriptTypes(await readFile(new URL('../src/client/Overview.ts', import.meta.url), 'utf8'))
+    .replace("import { createElement as h } from 'react'", 'const h = () => null')
+    .replace("'./model.js'", JSON.stringify(modelUrl))
+  const { scopeTiles, percent } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
+  assert.equal(percent(0, 0), 0)
+  assert.equal(percent(30, 25), 100)
+  assert.deepEqual(scopeTiles([{ key: 'empty', count: 0 }]), [])
+  const items = [{ key: 'user', count: 53 }, { key: 'im', count: 8 }, { key: 'memory', count: 7 }, { key: 'sidebar', count: 6 }, { key: 'ops', count: 5 }, { key: 'empty', count: 0 }]
+  const tiles = scopeTiles(items)
+  assert.equal(tiles.length, 5)
+  for (const tile of tiles) {
+    assert.ok(Math.abs(tile.width * tile.height / 10000 - items.find(item => item.key === tile.key).count / 79) < 1e-10)
+    assert.ok(tile.x >= 0 && tile.y >= 0 && tile.x + tile.width <= 100.000001 && tile.y + tile.height <= 100.000001)
+  }
+  assert.ok(Math.abs(tiles.reduce((area, tile) => area + tile.width * tile.height, 0) - 10000) < 1e-8)
+})
