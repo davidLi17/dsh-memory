@@ -7,7 +7,7 @@
 
 ## davidLi17 自用版 / Personal fork
 
-基于 [annkun/dsh-memory](https://github.com/annkun/dsh-memory)，保留 MIT 许可证与上游归属。当前自用版：`0.13.11-lhg.3`。
+基于 [annkun/dsh-memory](https://github.com/annkun/dsh-memory)，保留 MIT 许可证与上游归属。当前自用版：`26.11.10-lhg`。
 
 安装或切换到此版本（DSH Desktop）：
 
@@ -26,6 +26,20 @@ dsh plugin --profile desktop add 'github:davidLi17/dsh-memory#main'
 `memory_save` 建议明确选择 scope 和 kind；旧调用省略 scope 时保持原有自动选择，省略 kind 时保留已有用途，新条目默认 memory。模型不再从已知会话的项目旁路检索宿主启动目录的项目记忆。
 
 This fork separates purpose (`memory` / `reference`) from scope (`user` / `project`). References remain searchable without standing prompt injection. Existing files keep their behavior. The settings editor can reclassify or move entries to a known workspace without overwriting destination entries. No automatic migration, classifier service, or extra runtime dependency is introduced.
+
+### DSH 0.2.2-rc.1 兼容更新（26.11.10-lhg）
+
+- 明确声明 `0.2.2-rc.1` 与 `0.2.1-rc.5` 的预发布 peer 支持；开发依赖固定在 `0.2.2-rc.1`。保留旧宿主范围，不新增运行时依赖或扩展权限。
+- 等待异步 projection 注册完成后再发布记忆提示词，使用返回的专属 reader；同时兼容旧同步 disposer / snapshot 读取。注册或读取失败只退回当前目录规则，不误读其他注册者的状态。
+- 按真实 Session 的 `event.data` 与 JSON 字符串参数记录触碰；目录回放使用已提交的 `working-directory/change`，失败的 `working_directory` 请求不会让后续触碰串到错误目录。仍接受旧平铺事件。
+- projection 缓存版本升至 3，从会话事件重建触碰状态；不迁移或覆盖记忆文件。项目隔离、reference 按需读取、整理备份、全局管理页和 PTC 无损 JSON 输出规则不变。
+
+核对的官方源码为 [`dsh-v0.2.2-rc.1` / `66491b05`](https://github.com/deepseek-ai/deepseek-harness/tree/66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db)。对应契约：
+[异步注册迁移](https://github.com/deepseek-ai/deepseek-harness/blob/66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db/docs/upgrade-guide/v0.2.1-rc.2/session-projection-handles/guide.md)、
+[真实会话事件](https://github.com/deepseek-ai/deepseek-harness/blob/66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db/packages/core/session/src/types.ts)、
+[提交后的工作目录](https://github.com/deepseek-ai/deepseek-harness/blob/66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db/packages/session/working-directory/src/index.ts)。
+
+`npm run test:compat` 在系统临时目录安装各版独立依赖图，逐版编译并运行全部测试，防止旧版借用开发目录的新宿主。测试覆盖真实 Cordis/Session/projection/native executor，以及同步旧接口、异步拒绝、卸载、恢复和不同会话隔离。原始 `0.0.1-rc.1` 的未发布 type-only peer 继续沿用已有 `--legacy-peer-deps` 安装方式。`npm run test:package` 另行验证构建产物打包、独立安装、文件一致性和真实宿主激活。验证结果不等同于用户电脑上的 Desktop UI 实测；安装后仍需重启 DSH Desktop。
 
 ### 可视化管理 / Visual manager（0.13.11-lhg.3）
 

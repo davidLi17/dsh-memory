@@ -26,7 +26,7 @@ const ctx = {
     if (names.includes('webServer')) cb({ webServer: { register: r => { webRoutes.push(r); return () => {} } } })
   },
 }
-plugin.apply(ctx)
+await plugin.apply(ctx)
 const tool = n => registered.find(t => t.name === n)
 const exec = { signal: new AbortController().signal }
 let savedId = ''

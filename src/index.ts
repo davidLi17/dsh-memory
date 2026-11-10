@@ -988,9 +988,9 @@ const TOUCH_TOOL_ARGS: Record<string, string> = {
  * erases schemas to `{ parse(value) }` (its ErasedDefinition) and calls it
  * only when seeding from the persisted cache — this is the zero-dependency
  * equivalent of `z.array(z.union([z.string(), z.object({ cd: z.string() })]))`.
- * v2 items: a touch string, or a {cd} marker recording one working_directory
+ * v2/v3 items: a touch string, or a {cd} marker recording one working_directory
  * hop. Pure-string states (the v1 shape) parse unchanged — that IS the
- * one-time migration; persisted ver=1 rows are additionally discarded by the
+ * shape compatibility; persisted older-version rows are discarded by the
  * registry on the version bump and refolded from the session log.
  */
 const isTouchedDirsItem = (x: unknown): boolean =>
@@ -1004,10 +1004,8 @@ const touchedDirsSchema = {
   },
 }
 
-/** The official working-directory tool: `cd` enters a directory (omitted = read
- * the current one — verified against @deepseek-ai/dsh-tool-working-directory).
- * Its calls become {cd} state markers so injection can replay each touch's
- * historical cursor. */
+/** Legacy flat working-directory calls use `cd` (omitted = read-only).
+ * Official event envelopes instead record the committed directory change. */
 const CD_TOOL = 'working_directory'
 
 /**
@@ -1025,16 +1023,31 @@ const CD_TOOL = 'working_directory'
  */
 function foldTouchedDirs(state: unknown, event: unknown): Array<string | { cd: string }> {
   const cur = state as Array<string | { cd: string }>
-  const e = event as { type?: unknown, name?: unknown, arguments?: unknown } | undefined
-  if (e === undefined || e.type !== 'tool/call') return cur
-  const args = e.arguments as Record<string, unknown> | null | undefined
-  const argOf = (name: string): unknown => args !== null && typeof args === 'object' ? (args as Record<string, unknown>)[name] : undefined
-  if (e.name === CD_TOOL) {
+  const e = event as { type?: unknown, data?: unknown, name?: unknown, arguments?: unknown } | null | undefined
+  if (e === null || e === undefined) return cur
+  const committed = e.data !== null && typeof e.data === 'object'
+  const payload = (committed ? e.data : e) as { name?: unknown, arguments?: unknown, cwd?: unknown }
+  // Official Session events wrap data and retain raw JSON arguments. Only a
+  // committed directory change may move that log's cursor: a requested cd can
+  // fail, and replaying both a relative request and its commit would double it.
+  if (e.type === 'working-directory/change') {
+    const cwd = payload.cwd
+    return typeof cwd === 'string' && path.isAbsolute(cwd) ? pushTouchedCapped(cur, { cd: cwd }) : cur
+  }
+  if (e.type !== 'tool/call') return cur
+  if (committed && payload.name === CD_TOOL) return cur
+  if (payload.name !== CD_TOOL && (typeof payload.name !== 'string' || TOUCH_TOOL_ARGS[payload.name] === undefined)) return cur
+  let args: unknown = payload.arguments
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args) } catch { return cur }
+  }
+  const argOf = (name: string): unknown => args !== null && typeof args === 'object' && !Array.isArray(args) ? (args as Record<string, unknown>)[name] : undefined
+  if (payload.name === CD_TOOL) {
     const cd = argOf('cd')
     if (typeof cd !== 'string' || cd.trim() === '') return cur // read-mode call: the cursor does not move
     return pushTouchedCapped(cur, { cd })
   }
-  const argName = typeof e.name === 'string' ? TOUCH_TOOL_ARGS[e.name] : undefined
+  const argName = typeof payload.name === 'string' ? TOUCH_TOOL_ARGS[payload.name] : undefined
   if (argName === undefined) return cur
   const raw = argOf(argName)
   if (typeof raw !== 'string' || raw.trim() === '') return cur
@@ -1062,38 +1075,51 @@ function pushTouchedCapped(items: Array<string | { cd: string }>, item: string |
   return next
 }
 
+type TouchedDirsReader = (session: unknown) => unknown[] | undefined
+
 /**
- * Register the touched-dirs projection on the official sessionProjections
- * service — inject-free `ctx.get` read (A3): lean hosts without the registry
- * keep cwd-only activation. The definition carries BOTH registry
- * generations' field names: newer hosts read `stateSchema` + host-only
- * `stateOf`; the published rc line reads `schema` + `view` through
- * `snapshot` (verified by registering a structural schema against the real
- * published registry — it validates only `stateVersion`).
+ * Await registration before publishing prompt consumers. DSH 0.2.1-rc.2+
+ * returns a callable thenable, so typeof/instanceof checks cannot distinguish
+ * it from the old synchronous disposer. Keep the resolved owner's reader;
+ * never query another registration after our own registration rejects.
+ * Cordis owns disposal on the registering plugin's fiber in both generations.
  */
-function registerTouchedDirsProjection(ctx: Context): void {
-  const projections = (ctx as unknown as { get?: (name: string) => unknown }).get?.('sessionProjections') as
-    | { register?: (definition: unknown) => unknown }
-    | undefined
-  if (projections === undefined || typeof projections.register !== 'function') return
+async function registerTouchedDirsProjection(ctx: Context): Promise<TouchedDirsReader | undefined> {
   try {
-    projections.register({
+    const projections = (ctx as unknown as { get?: (name: string) => unknown }).get?.('sessionProjections') as
+      | { register?: (definition: unknown) => unknown }
+      | undefined
+    if (projections === undefined || typeof projections.register !== 'function') return undefined
+    const handle = await projections.register({
       key: TOUCHED_DIRS_KEY,
-      stateVersion: 2, // v2: {cd} markers enable the touch-time cursor replay (P1/P2); ver=1 cache rows are discarded by the registry and refolded from the log
+      stateVersion: 3, // Refold old caches: official event envelopes and committed cwd changes.
       stateSchema: touchedDirsSchema,
-      schema: touchedDirsSchema,
+      schema: touchedDirsSchema, // Legacy snapshot-only registry.
       view: (state: unknown) => state,
       init: () => [],
       apply: foldTouchedDirs,
-    })
+    }) as { stateOf?: (session: unknown) => unknown } | null | undefined
+    if (typeof handle?.stateOf === 'function') {
+      return session => {
+        try {
+          const value = handle.stateOf!(session)
+          return Array.isArray(value) ? value : undefined
+        } catch {
+          return undefined // A failed read keeps cwd-only activation.
+        }
+      }
+    }
+    // Successful old synchronous registration: use its registry read face.
+    return session => readTouchedDirs(projections, session)
   } catch {
-    // registry present but contract drift: degrade to cwd-only activation
+    // Both synchronous throws and asynchronous rejections degrade safely.
+    return undefined
   }
 }
 
 /**
- * Read the touched-dirs state off whichever registry generation the host
- * runs: newer hosts expose `stateOf(session, key)`; the published rc line
+ * Read a successfully registered old host's touched-dirs state. Intermediate
+ * hosts expose `stateOf(session, key)`; the original published rc line has
  * only `snapshot(session)` (which covers every registered unit). Returns
  * undefined whenever neither path works — touch activation silently
  * degrades to the cwd chain.
@@ -1148,7 +1174,7 @@ function dirTagChain(projRoot: string, absDir: string, into: Set<string>): void 
   for (let i = 1; i <= parts.length; i++) into.add(parts.slice(0, i).join('/'))
 }
 
-function registerMemoryGuidance(ctx: Context): void {
+function registerMemoryGuidance(ctx: Context, touchedDirs?: TouchedDirsReader): void {
   const systemPrompt = (ctx as unknown as { systemPrompt?: SystemPromptService }).systemPrompt
   if (systemPrompt === undefined) return // host composition has no systemPrompt service
   // order is REQUIRED and must be a finite number (dsh-system-prompt throws
@@ -1206,7 +1232,7 @@ function registerMemoryGuidance(ctx: Context): void {
           dirTagChain(projRoot, sessionCwd, activeTags)
           const agentSession = (args?.agent as { session?: unknown } | undefined)?.session
           if (agentSession !== undefined) {
-            const touched = readTouchedDirs((ctx as unknown as { get?: (name: string) => unknown }).get?.('sessionProjections'), agentSession)
+            const touched = touchedDirs?.(agentSession)
             if (touched !== undefined) {
               // P1/P2 fix: each relative touch resolves against the cursor AT ITS
               // TIME — start from the frozen creation cwd and advance through the
@@ -1277,8 +1303,8 @@ function registerMemoryGuidance(ctx: Context): void {
 
 export async function apply(ctx: Context): Promise<void> {
   await refineWithWorkspaceRegistry(ctx)
-  registerMemoryGuidance(ctx)
-  registerTouchedDirsProjection(ctx)
+  const touchedDirs = await registerTouchedDirsProjection(ctx)
+  registerMemoryGuidance(ctx, touchedDirs)
 
   ctx.tools.register(defineTool({
     name: 'memory_save',

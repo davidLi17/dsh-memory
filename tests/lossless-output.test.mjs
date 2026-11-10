@@ -7,7 +7,7 @@ import path from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
-import { snapshotJsonValue } from '@deepseek-ai/dsh-session'
+import { executeHostTool, installHostExecutor, snapshotJsonValue } from './host-execution.mjs'
 
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-lossless-'))
 const previousCwd = process.cwd()
@@ -20,9 +20,10 @@ const plugin = await import('../lib/index.js')
 const ctx = new Context()
 await ctx.plugin(SystemPrompt)
 await ctx.plugin(ToolRegistry)
+await installHostExecutor(ctx)
 await ctx.plugin(plugin)
 let call = 0
-const run = (name, args) => ctx.tools.execute({ name, arguments: args, callId: `lossless-${++call}`, signal: new AbortController().signal })
+const run = (name, args) => executeHostTool(ctx, { name, arguments: args, callId: `lossless-${++call}`, signal: new AbortController().signal })
 const valueOf = result => {
   assert.notEqual(result.isError, true, JSON.stringify(result))
   assert.notEqual(snapshotJsonValue(result.value), undefined, 'canonical output must be lossless JSON')
