@@ -80,3 +80,26 @@ test('real rejected registration degrades and never reads a conflicting owner', 
   await ctx.plugin(plugin)
   assert.doesNotMatch(await prompt(session), /Deep memory marker/)
 })
+
+// The source-host gate pins the unpublished rc.2 graph before enabling this API test.
+if (process.env.DSH_MEMORY_SOURCE_HOST === '0.2.2-rc.2') test('rc2 actual batch append folds committed cwd before each touch and rejects invalid batch atomically', async () => {
+  const { ctx, session, prompt } = await setup()
+  const events = session.append([
+    ['working-directory/change', { cwd: path.join(root, 'deep') }],
+    ['tool/call', { turn: 1, step: 1, callId: 'batch-read', name: 'read', arguments: JSON.stringify({ file_path: 'inside.ts' }) }],
+    ['working-directory/change', { cwd: root }],
+    ['tool/call', { turn: 1, step: 1, callId: 'batch-read2', name: 'read', arguments: JSON.stringify({ file_path: 'outside.ts' }) }],
+  ])
+  assert.equal(events.length, 4)
+  assert.match(await prompt(session), /Deep memory marker/)
+  assert.deepEqual(ctx.sessionProjections.checkpoint(session)[key].val, [{ cd: path.join(root, 'deep') }, 'inside.ts', { cd: root }, 'outside.ts'])
+  const other = ctx.sessions.create(undefined, { meta: { cwd: root } })
+  assert.doesNotMatch(await prompt(other), /Deep memory marker/)
+  const before = session.seq
+  assert.throws(() => session.append([
+    ['working-directory/change', { cwd: path.join(root, 'deep')}],
+    ['tool/call', undefined],
+  ]))
+  assert.equal(session.seq, before)
+  assert.deepEqual(ctx.sessionProjections.checkpoint(session)[key].val, [{ cd: path.join(root, 'deep') }, 'inside.ts', { cd: root }, 'outside.ts'])
+})

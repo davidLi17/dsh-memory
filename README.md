@@ -7,7 +7,7 @@
 
 ## davidLi17 自用版 / Personal fork
 
-基于 [annkun/dsh-memory](https://github.com/annkun/dsh-memory)，保留 MIT 许可证与上游归属。当前自用版：`26.11.10-lhg`。
+基于 [annkun/dsh-memory](https://github.com/annkun/dsh-memory)，保留 MIT 许可证与上游归属。当前自用版：`26.11.12-lhg`。
 
 安装或切换到此版本（DSH Desktop）：
 
@@ -26,6 +26,15 @@ dsh plugin --profile desktop add 'github:davidLi17/dsh-memory#main'
 `memory_save` 建议明确选择 scope 和 kind；旧调用省略 scope 时保持原有自动选择，省略 kind 时保留已有用途，新条目默认 memory。模型不再从已知会话的项目旁路检索宿主启动目录的项目记忆。
 
 This fork separates purpose (`memory` / `reference`) from scope (`user` / `project`). References remain searchable without standing prompt injection. Existing files keep their behavior. The settings editor can reclassify or move entries to a known workspace without overwriting destination entries. No automatic migration, classifier service, or extra runtime dependency is introduced.
+
+### DSH 0.2.2-rc.2 源码宿主验证（26.11.12-lhg）
+
+- 新增精确 `0.2.2-rc.2` peer 支持，保留旧版范围；开发依赖仍固定 rc.1。检查时 npm 尚未发布 rc.2 的核心包，因此不能将源码宿主验证写成 npm 发布版安装验证，也不使用尚不存在的包破坏已有 CI。
+- 官方源码固定 [`dsh-v0.2.2-rc.2` / `ddac9676`](https://github.com/deepseek-ai/deepseek-harness/tree/ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c)。projection 注册与 reader 契约未变；Session 新增批次追加，working-directory 新增 access 协调与结构化错误，已提交的目录事件保持兼容。记忆业务逻辑、缓存版本、隔离、reference 按需读取、备份与严格 JSON 均不变。
+- `npm run test:source-host -- /path/to/built/official/host` 使用已构建且 tracked 源码未修改的官方 checkout，在临时目录接入真实 rc.2 依赖图，验证全部测试、批次目录切换/触碰/隔离/无效批次原子拒绝，再打包独立安装并核对产物与真实 projection。应使用与官方构建一致的 Node；该命令不修改宿主 checkout、不升级用户安装。
+- 原三版 `npm run test:compat` 与 `npm run test:package` 继续验证 npm 已发布宿主。源码 gate 验证本插件需要的宿主组件，不代表官方整个 workspace 的构建或 Desktop UI 已通过。
+
+This release adds an exact rc.2 peer declaration and reproducible tests against the official source-built host. Published development dependencies stay on rc.1 until rc.2 packages are available. It changes no memory behavior, permissions, workflow, or installed profile.
 
 ### DSH 0.2.2-rc.1 兼容更新（26.11.10-lhg）
 

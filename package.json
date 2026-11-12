@@ -1,7 +1,7 @@
 {
   "name": "@fooxe/dsh-memory",
   "description": "Hierarchical Claude Code-style persistent memory for DeepSeek Harness: user + project (git-shared) scopes, session-start auto-injection, MEMORY.md index guards. Pure files, zero dependencies.",
-  "version": "26.11.10-lhg",
+  "version": "26.11.12-lhg",
   "publishConfig": {
     "access": "public"
   },
@@ -42,8 +42,8 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0",
-    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 || 0.2.1-rc.5 || 0.2.2-rc.1",
-    "@deepseek-ai/dsh-skill-filesystem": ">=0.0.1-rc.3 || 0.2.1-rc.5 || 0.2.2-rc.1"
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.0.1-rc.3 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
@@ -73,7 +73,8 @@
     "test": "node --test tests/basic.test.mjs tests/smoke.plugin.mjs tests/detection.test.mjs tests/pathedge.test.mjs tests/atomic.test.mjs tests/anchorless.test.mjs tests/touch.test.mjs tests/host.real.mjs tests/scopes-reference.test.mjs tests/lossless-output.test.mjs tests/client-model.test.mjs tests/client-panel.test.mjs tests/projection-registration.test.mjs tests/projection.real.mjs",
     "build:client": "tsdown",
     "test:compat": "node scripts/test-compatibility.mjs",
-    "test:package": "npm run build && node scripts/test-package.mjs"
+    "test:package": "npm run build && node scripts/test-package.mjs",
+    "test:source-host": "node scripts/test-source-host.mjs"
   },
   "engines": {
     "node": ">=22.19"
